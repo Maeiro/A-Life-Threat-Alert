@@ -57,7 +57,7 @@ local NEAT_PANEL_BODY_TEXTURE = "media/ui/NeatUI/DefaultPanel/MainPanelBG_FlatTo
 
 local modOptions
 if PZAPI and PZAPI.ModOptions then
-    modOptions = PZAPI.ModOptions:create(MOD_ID, "A-Life Threat Alert")
+    modOptions = PZAPI.ModOptions:create(MOD_ID, "Viewpoint Threat Detector")
     modOptions:addTickBox("EnableHostileWarning", "Warn about nearby hostile NPCs", true)
     modOptions:addTickBox("WarnCarefulNPCs", "Warn about nearby careful NPCs", true)
     modOptions:addTickBox("WarnNeutralNPCs", "Warn about nearby neutral NPCs", false)
@@ -526,7 +526,7 @@ local function updateWarning()
         warnings = {}
         rearZombieWarning = nil
         if not errorLogged then
-            print("[A-Life Threat Alert] Detection failed: " .. tostring(err))
+            print("[Viewpoint Threat Detector] Detection failed: " .. tostring(err))
             errorLogged = true
         end
     end
@@ -673,7 +673,7 @@ local function drawWarning()
         end
     end)
     if not ok and not errorLogged then
-        print("[A-Life Threat Alert] Warning display failed: " .. tostring(err))
+        print("[Viewpoint Threat Detector] Warning display failed: " .. tostring(err))
         errorLogged = true
     end
 end

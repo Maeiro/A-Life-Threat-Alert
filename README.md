@@ -1,6 +1,6 @@
-# A-Life Threat Alert
+# Viewpoint Threat Detector
 
-Standalone Project Zomboid Build 42 mod that warns when selected Project A-Life NPC stances are near the player. It does not require Viewpoint, Viewpoint Extended Support, or A-Life Stance Dots.
+Project Zomboid Build 42 mod that improves situational awareness with alerts for nearby Project A-Life NPCs and zombies approaching from behind. It does not require Project Viewpoint, Viewpoint Extended Support, or A-Life Stance Dots.
 
 Hostile, Careful, Neutral, Friendly, and Allied NPC warnings can each be enabled independently. Hostile and Careful are enabled by default; the other stance alerts are off by default to preserve the previous behavior. If several enabled stances are nearby, alerts appear from highest to lowest priority—Hostile, Careful, Neutral, Friendly, then Allied—with a distinct color for each. Unknown factions continue to use the A-Life default stance of Hostile. The warning distance is configurable from 5 to 100 tiles, with a default of 40. Alerts report distance and direction, and the optional firearm warning identifies carriers within each enabled stance.
 
@@ -9,3 +9,7 @@ The mod can also warn about regular zombies out of sight behind the player. Bala
 When NeatUI_Framework is active, alerts use its panel textures and styling. Without it, the alert falls back to the standard HUD text.
 
 Small icons distinguish A-Life NPC alerts from zombie alerts.
+
+## Alerts and configuration
+
+Configure the alerts through the in-game Mod Options. Project A-Life is required for NPC stance and firearm-carrier alerts; rear zombie alerts work independently.

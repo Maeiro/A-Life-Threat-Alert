@@ -1,6 +1,6 @@
-name=A-Life Threat Alert
+name=Viewpoint Threat Detector
 id=ALifeThreatAlert
 author=Maeiro
-description=Warns about configurable Project A-Life NPC stances and zombies behind you, with optional direction and firearm alerts.
+description=Displays configurable alerts for nearby Project A-Life NPC stances, firearm carriers, and zombies approaching from behind.
 modversion=1.2.7
 versionMin=42.20
