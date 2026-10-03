@@ -1,6 +1,6 @@
 name=A-Life Threat Alert
 id=ALifeThreatAlert
 author=Maeiro
-description=Warns you when hostile or careful Project A-Life NPCs are nearby.
-modversion=1.0.0
+description=Warns about nearby hostile or careful Project A-Life NPCs and zombies behind you, with optional direction and firearm alerts.
+modversion=1.2.3
 versionMin=42.20
