@@ -6,6 +6,12 @@ Hostile, Careful, Neutral, Friendly, and Allied NPC warnings can each be enabled
 
 The mod can also warn about regular zombies out of sight behind the player. Balanced range is enabled by default and follows the vanilla perception distance: 3.5 tiles normally and 6.5 with Keen Hearing. Disable balanced range to set a custom distance from 5 to 100 tiles. The rear detection angle is adjustable from 30 to 360 degrees (180 degrees by default), and its directional arrow points toward the nearest detected zombie. Larger angles widen the detection area toward the sides and front. It also works when Project A-Life is not loaded; A-Life NPCs are excluded from the zombie count.
 
+An optional setting (off by default) ignores fallen zombies in rear warnings. The warning stack can be dragged with the mouse; its position is saved between sessions.
+
+Alerts are disabled while the player is inside a vehicle by default; this can be turned off in Mod Options.
+
+Optional alarm sounds are off by default. When enabled, choose radar ping, siren, heartbeat, or soft beep. These sound cues are provided by Project Viewpoint / PZ3D Minimap, which must be enabled for them to play. An alarm plays when a new warning type appears, not on every scan.
+
 When NeatUI_Framework is active, alerts use its panel textures and styling. Without it, the alert falls back to the standard HUD text.
 
 Small icons distinguish A-Life NPC alerts from zombie alerts.
