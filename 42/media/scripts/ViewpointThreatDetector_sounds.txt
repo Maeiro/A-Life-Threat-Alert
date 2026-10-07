@@ -1,0 +1,50 @@
+module Base
+{
+    sound ViewpointThreatDetectorRadarPing
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/radar1.wav,
+            volume = 0.8,
+        }
+    }
+
+    sound ViewpointThreatDetectorSiren
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/alarm.wav,
+            volume = 0.8,
+        }
+    }
+
+    sound ViewpointThreatDetectorHeartbeat
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/heartbeat_slow_0.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSoftBeep
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/beep.wav,
+            volume = 0.8,
+        }
+    }
+}

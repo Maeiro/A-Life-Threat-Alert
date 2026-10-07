@@ -12,10 +12,10 @@ local MAX_REAR_ZOMBIE_ANGLE = 360
 local REAR_ZOMBIE_ANGLE_STEP = 5
 local ALERT_POSITION_FILE = "ViewpointThreatDetectorPosition.txt"
 local ALARM_SOUND_IDS = {
-    "pz3dMinimapRadarPing",
-    "pz3dMinimapSiren",
-    "pz3dMinimapHeartbeat",
-    "pz3dMinimapSoftBeep",
+    "ViewpointThreatDetectorRadarPing",
+    "ViewpointThreatDetectorSiren",
+    "ViewpointThreatDetectorHeartbeat",
+    "ViewpointThreatDetectorSoftBeep",
 }
 local SCAN_INTERVAL = 5
 local STANCES = { allied = true, friendly = true, neutral = true, careful = true, hostile = true }
@@ -123,7 +123,7 @@ if PZAPI and PZAPI.ModOptions then
         "EnableAlarmSound",
         "Play an alarm sound for new threats",
         false,
-        "Alarm sounds use the sound cues from Project Viewpoint / PZ3D Minimap; that mod must be enabled."
+        "Uses sound files bundled with Viewpoint Threat Detector; no other mod is required."
     )
     local alarmSoundOption = modOptions:addComboBox(
         "AlarmSound",

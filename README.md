@@ -10,7 +10,7 @@ An optional setting (off by default) ignores fallen zombies in rear warnings. Th
 
 Alerts are disabled while the player is inside a vehicle by default; this can be turned off in Mod Options.
 
-Optional alarm sounds are off by default. When enabled, choose radar ping, siren, heartbeat, or soft beep. These sound cues are provided by Project Viewpoint / PZ3D Minimap, which must be enabled for them to play. An alarm plays when a new warning type appears, not on every scan.
+Optional alarm sounds are off by default. When enabled, choose the bundled radar ping, siren, heartbeat, or soft beep. No other mod is required. An alarm plays when a new warning type appears, not on every scan. Sound asset licenses and credits are included in `42/SOUND_CREDITS.txt`.
 
 When NeatUI_Framework is active, alerts use its panel textures and styling. Without it, the alert falls back to the standard HUD text.
 

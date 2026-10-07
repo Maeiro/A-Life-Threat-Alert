@@ -1,0 +1,18 @@
+Included sound assets
+
+Radar ping
+"Radar Bleep" by dklon, licensed under CC BY 3.0.
+https://opengameart.org/content/radar-bleep
+https://creativecommons.org/licenses/by/3.0/
+
+Siren
+"Alarm" by Frenchyboy, licensed under CC0.
+https://opengameart.org/content/alarm-2
+
+Heartbeat
+"Heartbeat sounds" by bart, licensed under CC0.
+https://opengameart.org/content/heartbeat-sounds
+
+Soft beep
+"Beep Tone Sound SFX" by qubodup, licensed under CC0.
+https://lpc.opengameart.org/content/beep-tone-sound-sfx
