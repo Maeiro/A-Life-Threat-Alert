@@ -3,16 +3,23 @@ require "ISUI/ISUIElement"
 
 local MOD_ID = "ALifeThreatAlert"
 local DEFAULT_RANGE = 40
+local DEFAULT_CLOSE_HOSTILE_RANGE = 10
+local DEFAULT_ALARM_SOUND = 3
+local DEFAULT_CLOSE_HOSTILE_ALARM_SOUND = 2
+local DEFAULT_SPRINTER_ALARM_SOUND = 2
 local DEFAULT_REAR_ZOMBIE_RANGE = 20
+local DEFAULT_SPRINTER_RANGE = 20
 local DEFAULT_REAR_ZOMBIE_ANGLE = 180
 local DEFAULT_ALARM_VOLUME = 150
 local MAX_ALARM_VOLUME = 200
 local MIN_RANGE = 5
 local MAX_RANGE = 100
+local MIN_CLOSE_HOSTILE_RANGE = 1
 local MIN_REAR_ZOMBIE_ANGLE = 30
 local MAX_REAR_ZOMBIE_ANGLE = 360
 local REAR_ZOMBIE_ANGLE_STEP = 5
 local ALERT_POSITION_FILE = "ViewpointThreatDetectorPosition.txt"
+local ZOMBIE_ALERT_POSITION_FILE = "ViewpointThreatDetectorZombiePosition.txt"
 local ALARM_SOUND_IDS = {
     "ViewpointThreatDetectorRadarPing",
     "ViewpointThreatDetectorSiren",
@@ -68,11 +75,13 @@ local NEAT_PANEL_BODY_TEXTURE = "media/ui/NeatUI/DefaultPanel/MainPanelBG_FlatTo
 local modOptions
 if PZAPI and PZAPI.ModOptions then
     modOptions = PZAPI.ModOptions:create(MOD_ID, "Viewpoint Threat Detector")
+    modOptions:addTitle("A-Life NPC Threats")
     modOptions:addTickBox("EnableHostileWarning", "Warn about nearby hostile NPCs", true)
     modOptions:addTickBox("WarnCarefulNPCs", "Warn about nearby careful NPCs", true)
     modOptions:addTickBox("WarnNeutralNPCs", "Warn about nearby neutral NPCs", false)
     modOptions:addTickBox("WarnFriendlyNPCs", "Warn about nearby friendly NPCs", false)
     modOptions:addTickBox("WarnAlliedNPCs", "Warn about nearby allied NPCs", false)
+    modOptions:addTickBox("ShowFirearmWarning", "Identify nearby NPCs carrying firearms", false)
     modOptions:addSlider(
         "WarningDistance",
         "Maximum warning distance (tiles)",
@@ -82,14 +91,23 @@ if PZAPI and PZAPI.ModOptions then
         DEFAULT_RANGE,
         "Maximum horizontal distance at which A-Life NPCs trigger a warning."
     )
-    modOptions:addTickBox("ShowDirectionArrow", "Show a direction arrow beside the warning", true)
-    modOptions:addTickBox("ShowFirearmWarning", "Identify nearby NPCs carrying firearms", false)
     modOptions:addTickBox(
-        "DisableInVehicle",
-        "Disable alerts while inside a vehicle",
+        "EnableCloseHostileAlarm",
+        "Play a separate alarm for close Hostile A-Life NPCs",
         true,
-        "When enabled, threat detection, alerts, and alarm sounds are suppressed until you leave the vehicle."
+        "Triggers independently of the regular NPC warning when a Hostile NPC enters the configured distance."
     )
+    modOptions:addSlider(
+        "CloseHostileAlarmDistance",
+        "Close Hostile A-Life alarm distance (tiles)",
+        MIN_CLOSE_HOSTILE_RANGE,
+        MAX_RANGE,
+        1,
+        DEFAULT_CLOSE_HOSTILE_RANGE,
+        "Distance at which the separate Hostile A-Life alarm is triggered."
+    )
+
+    modOptions:addTitle("Rear Zombie Threats")
     modOptions:addTickBox("EnableRearZombieWarning", "Warn when zombies are behind you", true)
     modOptions:addTickBox(
         "RearZombieSameFloorOnly",
@@ -133,11 +151,75 @@ if PZAPI and PZAPI.ModOptions then
         DEFAULT_REAR_ZOMBIE_ANGLE,
         "Total angle centered behind you. 180 degrees detects the rear half; larger values widen the area."
     )
+
+    modOptions:addTitle("Sprinter Threats")
+    modOptions:addTickBox(
+        "EnableSprinterWarning",
+        "Warn about nearby sprinters",
+        true,
+        "Displays a separate warning and can play its own alarm when a sprinter enters range."
+    )
+    modOptions:addSlider(
+        "SprinterWarningDistance",
+        "Sprinter warning distance (tiles)",
+        MIN_CLOSE_HOSTILE_RANGE,
+        MAX_RANGE,
+        1,
+        DEFAULT_SPRINTER_RANGE,
+        "Maximum distance for the sprinter warning and its dedicated alarm."
+    )
+    modOptions:addTickBox(
+        "SprinterSameFloorOnly",
+        "Detect sprinters only on the same floor",
+        true,
+        "When enabled, sprinters on other floors do not trigger this warning."
+    )
+    modOptions:addTickBox(
+        "SprinterRequireLineOfSight",
+        "Require a clear path to sprinters",
+        true,
+        "When enabled, walls and closed doors block sprinter warnings."
+    )
+    modOptions:addTickBox(
+        "SprinterIgnoreFallen",
+        "Ignore fallen sprinters",
+        true,
+        "When enabled, sprinters on the ground do not trigger the separate warning."
+    )
+
+    modOptions:addTitle("Alert Display")
+    modOptions:addTickBox("ShowDirectionArrow", "Show a direction arrow beside the warning", true)
+    modOptions:addTickBox(
+        "MinimalAlertUI",
+        "Use minimal alert UI",
+        false,
+        "Uses compact text and icons without the NeatUI alert cards."
+    )
+    modOptions:addTickBox(
+        "SeparateAlertPositions",
+        "Separate A-Life and zombie alert positions",
+        false,
+        "When enabled, drag A-Life and zombie alerts independently to place them anywhere on the screen."
+    )
+    modOptions:addTickBox(
+        "EnableDragDiagnostics",
+        "Log alert drag diagnostics",
+        false,
+        "Temporarily logs alert hitbox positions and mouse drag events to console.txt. Turn off after testing."
+    )
+    modOptions:addTickBox(
+        "DisableInVehicle",
+        "Disable alerts while inside a vehicle",
+        true,
+        "When enabled, threat detection, alerts, and alarm sounds are suppressed until you leave the vehicle."
+    )
+
+    modOptions:addTitle("Alarm Sounds")
     modOptions:addTickBox(
         "EnableAlarmSound",
         "Play an alarm sound for new threats",
         true,
-        "Enabled by default. Uses sounds bundled with Viewpoint Threat Detector."
+        "Master switch for all alarm sounds, including the separate close Hostile A-Life and sprinter alarms."
     )
     modOptions:addSlider(
         "AlarmVolume",
@@ -150,9 +232,15 @@ if PZAPI and PZAPI.ModOptions then
     )
     modOptions:addTickBox(
         "ZombieAlarmOnly",
-        "Play alarm only for zombie warnings",
+        "Play the regular alarm only for zombie warnings",
         true,
-        "When enabled, A-Life NPC alerts do not trigger alarm sounds."
+        "When enabled, regular A-Life warnings do not trigger the regular alarm. Separate close Hostile A-Life and sprinter alarms are configured independently."
+    )
+    modOptions:addTickBox(
+        "EnableSprinterAlarm",
+        "Play a separate alarm for sprinters",
+        true,
+        "Uses the alarm sound and volume configured below when a sprinter enters range."
     )
     local alarmSoundOption = modOptions:addComboBox(
         "AlarmSound",
@@ -163,17 +251,69 @@ if PZAPI and PZAPI.ModOptions then
     alarmSoundOption:addItem("Siren", false)
     alarmSoundOption:addItem("Heartbeat", true)
     alarmSoundOption:addItem("Soft beep", false)
+    local closeHostileAlarmSoundOption = modOptions:addComboBox(
+        "CloseHostileAlarmSound",
+        "Close Hostile A-Life alarm sound",
+        "Choose a distinct sound cue for Hostile A-Life NPCs that enter the close range."
+    )
+    closeHostileAlarmSoundOption:addItem("Radar ping", false)
+    closeHostileAlarmSoundOption:addItem("Siren", true)
+    closeHostileAlarmSoundOption:addItem("Heartbeat", false)
+    closeHostileAlarmSoundOption:addItem("Soft beep", false)
+    local sprinterAlarmSoundOption = modOptions:addComboBox(
+        "SprinterAlarmSound",
+        "Sprinter alarm sound",
+        "Choose a distinct sound cue for sprinters entering range."
+    )
+    sprinterAlarmSoundOption:addItem("Radar ping", false)
+    sprinterAlarmSoundOption:addItem("Siren", true)
+    sprinterAlarmSoundOption:addItem("Heartbeat", false)
+    sprinterAlarmSoundOption:addItem("Soft beep", false)
+    modOptions:addSlider(
+        "CloseHostileAlarmVolume",
+        "Close Hostile A-Life alarm volume (%)",
+        0,
+        MAX_ALARM_VOLUME,
+        10,
+        DEFAULT_ALARM_VOLUME,
+        "Volume multiplier for the separate close Hostile A-Life alarm."
+    )
+    modOptions:addSlider(
+        "SprinterAlarmVolume",
+        "Sprinter alarm volume (%)",
+        0,
+        MAX_ALARM_VOLUME,
+        10,
+        DEFAULT_ALARM_VOLUME,
+        "Volume multiplier for the separate sprinter alarm."
+    )
 end
 
 local alertPositionX
 local alertPositionY
 local alertDragHandle
+local zombieAlertPositionX
+local zombieAlertPositionY
+local zombieAlertDragHandle
 local disableAlertsInVehicle = true
 local playerInVehicle = false
+local dragDiagnosticsEnabled = false
+local activeGlobalDragHandle
+local globalDragMouseX
+local globalDragMouseY
+local warnings = {}
+local rearZombieWarning
+local sprinterWarning
 
-local function loadAlertPosition()
+local function logDragDiagnostic(message)
+    if dragDiagnosticsEnabled then
+        print("[Viewpoint Threat Detector][Drag] " .. message)
+    end
+end
+
+local function loadPosition(fileName)
     if not getFileReader then return end
-    local ok, reader = pcall(getFileReader, ALERT_POSITION_FILE, false)
+    local ok, reader = pcall(getFileReader, fileName, false)
     if not ok or not reader then return end
 
     local readOk, x, y = pcall(function()
@@ -184,24 +324,33 @@ local function loadAlertPosition()
     end)
     if not readOk then
         pcall(function() reader:close() end)
-        return
+        return nil, nil
     end
     if x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then
-        alertPositionX = x
-        alertPositionY = y
+        return x, y
     end
+    return nil, nil
 end
 
-local function saveAlertPosition()
-    if not getFileWriter or not alertPositionX or not alertPositionY then return end
-    local ok, writer = pcall(getFileWriter, ALERT_POSITION_FILE, true, false)
+local function savePosition(fileName, x, y)
+    if not getFileWriter or not x or not y then return end
+    local ok, writer = pcall(getFileWriter, fileName, true, false)
     if not ok or not writer then return end
 
-    pcall(function() writer:write(string.format("%.6f\n%.6f\n", alertPositionX, alertPositionY)) end)
+    pcall(function() writer:write(string.format("%.6f\n%.6f\n", x, y)) end)
     pcall(function() writer:close() end)
 end
 
-loadAlertPosition()
+alertPositionX, alertPositionY = loadPosition(ALERT_POSITION_FILE)
+zombieAlertPositionX, zombieAlertPositionY = loadPosition(ZOMBIE_ALERT_POSITION_FILE)
+
+local function saveAlertPosition(kind)
+    if kind == "zombie" then
+        savePosition(ZOMBIE_ALERT_POSITION_FILE, zombieAlertPositionX, zombieAlertPositionY)
+    else
+        savePosition(ALERT_POSITION_FILE, alertPositionX, alertPositionY)
+    end
+end
 
 local AlertDragHandle = ISUIElement:derive("ViewpointThreatDetectorAlertDragHandle")
 
@@ -209,58 +358,131 @@ function AlertDragHandle:new()
     return ISUIElement.new(self, 0, 0, 1, 1)
 end
 
-function AlertDragHandle:onMouseDown(x, y)
-    self.dragging = true
-    self.dragMoved = false
-    return true
-end
-
-function AlertDragHandle:onMouseMove(dx, dy)
-    if not self.dragging then return end
+local function moveAlertDragHandle(handle, dx, dy, source)
+    if not handle.dragging then return end
     local core = getCore()
     local screenWidth = core:getScreenWidth()
     local screenHeight = core:getScreenHeight()
     if screenWidth <= 0 or screenHeight <= 0 then return end
 
-    local x = math.max(0, math.min(screenWidth - self.width, self.x + dx))
-    local y = math.max(0, math.min(screenHeight - self.height, self.y + dy))
-    self:setX(x)
-    self:setY(y)
-    alertPositionX = (x + self.width * 0.5) / screenWidth
-    alertPositionY = y / screenHeight
-    self.dragMoved = true
+    local x = math.max(0, math.min(screenWidth - handle.width, handle.x + dx))
+    local y = math.max(0, math.min(screenHeight - handle.height, handle.y + dy))
+    handle:setX(x)
+    handle:setY(y)
+    handle:bringToTop()
+    if handle.positionKind == "zombie" then
+        zombieAlertPositionX = (x + handle.width * 0.5) / screenWidth
+        zombieAlertPositionY = y / screenHeight
+    else
+        alertPositionX = (x + handle.width * 0.5) / screenWidth
+        alertPositionY = y / screenHeight
+    end
+    handle.dragMoved = true
+    handle.dragMoveLogCount = (handle.dragMoveLogCount or 0) + 1
+    if handle.dragMoveLogCount == 1 or handle.dragMoveLogCount % 10 == 0 then
+        local captureOk, captured = pcall(function() return handle:getIsCaptured() end)
+        logDragDiagnostic(string.format(
+            "handle-mouse-move source=%s kind=%s delta=(%.1f,%.1f) position=(%.1f,%.1f) captured=%s",
+            source, tostring(handle.positionKind), dx, dy, x, y,
+            tostring(captureOk and captured)
+        ))
+    end
+end
+
+local function finishAlertDrag(handle, source)
+    local wasDragging = handle.dragging == true
+    if not wasDragging then return false end
+    local moved = handle.dragMoved == true
+    handle.dragging = false
+    handle.manualDrag = false
+    pcall(function() handle:setCapture(false) end)
+    if wasDragging and moved then saveAlertPosition(handle.positionKind) end
+    if activeGlobalDragHandle == handle then activeGlobalDragHandle = nil end
+    logDragDiagnostic(string.format(
+        "handle-mouse-up source=%s kind=%s moved=%s position=(%.1f,%.1f) savedPosition=(%.4f,%.4f)",
+        source, tostring(handle.positionKind), tostring(moved), handle.x, handle.y,
+        handle.positionKind == "zombie" and (zombieAlertPositionX or 0) or (alertPositionX or 0),
+        handle.positionKind == "zombie" and (zombieAlertPositionY or 0) or (alertPositionY or 0)
+    ))
+    handle.dragMoved = false
+    return wasDragging
+end
+
+function AlertDragHandle:onMouseDown(x, y)
+    if activeGlobalDragHandle == self then activeGlobalDragHandle = nil end
+    self.manualDrag = false
+    self.dragging = true
+    self.dragMoved = false
+    self.dragMoveLogCount = 0
+    self.dragOutsideLogged = false
+    self:setCapture(true)
+    self:bringToTop()
+    local captureOk, captured = pcall(function() return self:getIsCaptured() end)
+    logDragDiagnostic(string.format(
+        "handle-mouse-down kind=%s local=(%.1f,%.1f) bounds=(%.1f,%.1f %.1fx%.1f) captured=%s",
+        tostring(self.positionKind), x, y, self.x, self.y, self.width, self.height,
+        tostring(captureOk and captured)
+    ))
+    return true
+end
+
+function AlertDragHandle:onMouseMove(dx, dy)
+    if self.manualDrag then return end
+    moveAlertDragHandle(self, dx, dy, "ui")
 end
 
 function AlertDragHandle:onMouseMoveOutside(dx, dy)
+    if not self.dragOutsideLogged then
+        logDragDiagnostic("handle-mouse-move-outside kind=" .. tostring(self.positionKind))
+        self.dragOutsideLogged = true
+    end
     self:onMouseMove(dx, dy)
 end
 
 function AlertDragHandle:onMouseUp(x, y)
-    local wasDragging = self.dragging == true
-    self.dragging = false
-    if self.dragMoved then saveAlertPosition() end
-    return wasDragging
+    if self.manualDrag then return false end
+    return finishAlertDrag(self, "ui")
 end
 
 function AlertDragHandle:onMouseUpOutside(x, y)
     self:onMouseUp(x, y)
 end
 
-local function ensureAlertDragHandle()
-    if alertDragHandle then return alertDragHandle end
+local function ensureAlertDragHandle(kind)
+    kind = kind == "zombie" and "zombie" or "alife"
+    local existingHandle
+    if kind == "zombie" then
+        existingHandle = zombieAlertDragHandle
+    else
+        existingHandle = alertDragHandle
+    end
+    if existingHandle then return existingHandle end
     local ok, handle = pcall(function()
         local instance = AlertDragHandle:new()
+        instance.positionKind = kind
         instance:initialise()
         instance:addToUIManager()
+        instance:setWantMouseEvents(true)
+        instance:setAlwaysOnTop(true)
         instance:setVisible(false)
         return instance
     end)
-    if ok then alertDragHandle = handle end
-    return alertDragHandle
+    if ok then
+        if kind == "zombie" then
+            zombieAlertDragHandle = handle
+        else
+            alertDragHandle = handle
+        end
+        logDragDiagnostic("handle-created kind=" .. kind)
+    end
+    return handle
 end
 
 if Events and Events.OnGameStart then
-    Events.OnGameStart.Add(ensureAlertDragHandle)
+    Events.OnGameStart.Add(function()
+        ensureAlertDragHandle("alife")
+        ensureAlertDragHandle("zombie")
+    end)
 end
 
 local function getOption(name, fallback)
@@ -275,10 +497,127 @@ local function getOption(name, fallback)
     return value
 end
 
+if Events and Events.OnMouseDown then
+    Events.OnMouseDown.Add(function()
+        local mouseX = getMouseX and getMouseX() or -1
+        local mouseY = getMouseY and getMouseY() or -1
+        local function describeHandle(kind, handle)
+            if not handle then return kind .. "=missing" end
+            local inside = mouseX >= handle.x and mouseX < handle.x + handle.width
+                and mouseY >= handle.y and mouseY < handle.y + handle.height
+            local capturedOk, captured = pcall(function() return handle:getIsCaptured() end)
+            local visibleOk, visible = pcall(function() return handle:isVisible() end)
+            local mouseEventsOk, mouseEvents = pcall(function() return handle:isWantMouseEvents() end)
+            return string.format(
+                "%s=(alertVisible:%s uiVisible:%s mouseEvents:%s inside:%s captured:%s bounds:%.1f,%.1f %.1fx%.1f)",
+                kind, tostring(handle.alertVisible == true), tostring(visibleOk and visible),
+                tostring(mouseEventsOk and mouseEvents),
+                tostring(inside), tostring(capturedOk and captured),
+                handle.x, handle.y, handle.width, handle.height
+            )
+        end
+        if dragDiagnosticsEnabled then
+            logDragDiagnostic(string.format(
+                "global-mouse-down cursor=(%.1f,%.1f) leftDown=%s alifeWarnings=%d rearZombie=%s sprinters=%s %s %s",
+                mouseX, mouseY,
+                tostring(isMouseButtonDown and isMouseButtonDown(0) or false),
+                #warnings, tostring(rearZombieWarning ~= nil), tostring(sprinterWarning ~= nil),
+                describeHandle("alife", alertDragHandle),
+                describeHandle("zombie", zombieAlertDragHandle)
+            ))
+        end
+
+        if not isMouseButtonDown or not isMouseButtonDown(0) then return end
+        local candidates = {}
+        if zombieAlertDragHandle then candidates[#candidates + 1] = zombieAlertDragHandle end
+        if alertDragHandle then candidates[#candidates + 1] = alertDragHandle end
+        for _, handle in ipairs(candidates) do
+            if handle and not handle.dragging then
+                local inside = mouseX >= handle.x and mouseX < handle.x + handle.width
+                    and mouseY >= handle.y and mouseY < handle.y + handle.height
+                local hasActiveAlert
+                if handle.positionKind == "zombie" then
+                    hasActiveAlert = rearZombieWarning ~= nil or sprinterWarning ~= nil
+                else
+                    hasActiveAlert = #warnings > 0
+                end
+                logDragDiagnostic(string.format(
+                    "global-drag-candidate kind=%s inside=%s active=%s bounds=(%.1f,%.1f %.1fx%.1f)",
+                    tostring(handle.positionKind), tostring(inside), tostring(hasActiveAlert),
+                    handle.x, handle.y, handle.width, handle.height
+                ))
+                if hasActiveAlert and inside then
+                    activeGlobalDragHandle = handle
+                    globalDragMouseX = mouseX
+                    globalDragMouseY = mouseY
+                    handle.dragging = true
+                    handle.manualDrag = true
+                    handle.dragMoved = false
+                    handle.dragMoveLogCount = 0
+                    handle.dragOutsideLogged = false
+                    logDragDiagnostic("global-drag-start kind=" .. tostring(handle.positionKind))
+                    return
+                end
+            end
+        end
+    end)
+end
+
+local function updateGlobalAlertDrag()
+    local handle = activeGlobalDragHandle
+    if not handle then return end
+    if not handle.manualDrag then
+        activeGlobalDragHandle = nil
+        return
+    end
+    if not isMouseButtonDown or not isMouseButtonDown(0) then
+        finishAlertDrag(handle, "global")
+        return
+    end
+
+    local mouseX = getMouseX and getMouseX()
+    local mouseY = getMouseY and getMouseY()
+    if not mouseX or not mouseY then return end
+    local deltaX = mouseX - globalDragMouseX
+    local deltaY = mouseY - globalDragMouseY
+    globalDragMouseX = mouseX
+    globalDragMouseY = mouseY
+    if deltaX ~= 0 or deltaY ~= 0 then
+        moveAlertDragHandle(handle, deltaX, deltaY, "global")
+    end
+end
+
 local function warningRange()
     local value = tonumber(getOption("WarningDistance", DEFAULT_RANGE))
     if not value then return DEFAULT_RANGE end
     return math.max(MIN_RANGE, math.min(MAX_RANGE, math.floor(value + 0.5)))
+end
+
+local function closeHostileAlarmRange()
+    local value = tonumber(getOption("CloseHostileAlarmDistance", DEFAULT_CLOSE_HOSTILE_RANGE))
+    if not value then return DEFAULT_CLOSE_HOSTILE_RANGE end
+    return math.max(MIN_CLOSE_HOSTILE_RANGE, math.min(MAX_RANGE, math.floor(value + 0.5)))
+end
+
+local function sprinterWarningRange()
+    local value = tonumber(getOption("SprinterWarningDistance", DEFAULT_SPRINTER_RANGE))
+    if not value then return DEFAULT_SPRINTER_RANGE end
+    return math.max(MIN_CLOSE_HOSTILE_RANGE, math.min(MAX_RANGE, math.floor(value + 0.5)))
+end
+
+local function isSprinter(zombie)
+    local ok, speedType = pcall(function() return zombie:getSpeedType() end)
+    if not ok then return false end
+    local constantOk, sprinterType = pcall(function() return IsoZombie.SPEED_SPRINTER end)
+    return constantOk and sprinterType ~= nil and speedType == sprinterType
+end
+
+local function zombieAlertId(zombie)
+    local ok, id = pcall(function() return zombie:getID() end)
+    if ok and id ~= nil then return tostring(id) end
+    ok, id = pcall(function() return zombie:getOnlineID() end)
+    if ok and id ~= nil then return tostring(id) end
+    return tostring(zombie)
 end
 
 local function rearZombieWarningRange(player)
@@ -437,8 +776,10 @@ local function carriesFirearm(project, shell)
     return ok and result == true
 end
 
-local warnings = {}
-local rearZombieWarning
+local sprinterZombieIDs = {}
+local closeHostileNPCs = {}
+local lastCloseHostileNPCs = {}
+local lastSprinterZombieIDs = {}
 local errorLogged = false
 
 local function directionSector(dx, dy, forwardX, forwardY)
@@ -561,29 +902,201 @@ local function mergeBounds(bounds, x, y, width, height)
     return bounds
 end
 
-local function updateAlertDragHandle(bounds, screenWidth, screenHeight)
+local function updateAlertDragHandle(bounds, screenWidth, screenHeight, kind)
+    kind = kind == "zombie" and "zombie" or "alife"
+    local handle
+    if kind == "zombie" then
+        handle = zombieAlertDragHandle
+    else
+        handle = alertDragHandle
+    end
     if not bounds then
-        if alertDragHandle and not alertDragHandle.dragging then
-            alertDragHandle:setVisible(false)
+        if handle and handle.alertVisible then
+            handle.alertVisible = false
+        end
+        if handle and not handle.dragging then
+            handle:setVisible(false)
         end
         return
     end
 
-    local handle = ensureAlertDragHandle()
+    handle = ensureAlertDragHandle(kind)
     if not handle then return end
     local width = bounds.right - bounds.x
     local height = bounds.bottom - bounds.y
     local x = math.max(0, math.min(math.max(0, screenWidth - width), bounds.x))
     local y = math.max(0, math.min(math.max(0, screenHeight - height), bounds.y))
     if x ~= bounds.x or y ~= bounds.y then
-        alertPositionX = (x + width * 0.5) / math.max(screenWidth, 1)
-        alertPositionY = y / math.max(screenHeight, 1)
+        if kind == "zombie" then
+            zombieAlertPositionX = (x + width * 0.5) / math.max(screenWidth, 1)
+            zombieAlertPositionY = y / math.max(screenHeight, 1)
+        else
+            alertPositionX = (x + width * 0.5) / math.max(screenWidth, 1)
+            alertPositionY = y / math.max(screenHeight, 1)
+        end
     end
     handle:setX(x)
     handle:setY(y)
     handle:setWidth(math.max(1, width))
     handle:setHeight(math.max(1, height))
     handle:setVisible(true)
+    handle:bringToTop()
+    handle.alertVisible = true
+    local geometry = string.format("%.1f,%.1f %.1fx%.1f", x, y, width, height)
+    if handle.diagnosticGeometry ~= geometry then
+        local visibleOk, visible = pcall(function() return handle:isVisible() end)
+        local mouseEventsOk, mouseEvents = pcall(function() return handle:isWantMouseEvents() end)
+        logDragDiagnostic(string.format(
+            "handle-bounds kind=%s bounds=%s screen=%dx%d alertVisible=%s uiVisible=%s mouseEvents=%s",
+            kind, geometry, screenWidth, screenHeight,
+            tostring(handle.alertVisible), tostring(visibleOk and visible),
+            tostring(mouseEventsOk and mouseEvents)
+        ))
+        handle.diagnosticGeometry = geometry
+    end
+end
+
+local function alertAnchor(kind, screenWidth, screenHeight, defaultY)
+    if kind == "zombie" then
+        return (zombieAlertPositionX or 0.5) * screenWidth,
+            zombieAlertPositionY and zombieAlertPositionY * screenHeight
+                or defaultY or screenHeight * 0.08
+    end
+    return (alertPositionX or 0.5) * screenWidth,
+        alertPositionY and alertPositionY * screenHeight or defaultY or 24
+end
+
+local function drawCompactAlertLine(text, screenWidth, centerX, y, message, colour,
+        iconKind, stance, sector, showArrow)
+    local icon = typeIconTexture(iconKind)
+    local arrow = showArrow and directionTextureFor(stance, sector) or nil
+    if not arrow and sector then
+        message = message .. " - " .. (DIRECTION_LABELS[sector] or DIRECTION_LABELS[1])
+    end
+
+    local font = UIFont.Small
+    local lineHeight = text:getFontHeight(font)
+    local iconSize = icon and 16 or 0
+    local iconGap = icon and 5 or 0
+    local arrowSize = arrow and 16 or 0
+    local arrowGap = arrow and 5 or 0
+    local messageWidth = text:MeasureStringX(font, message)
+    local width = iconSize + iconGap + messageWidth + arrowGap + arrowSize
+    local x = math.floor(math.max(8, math.min(screenWidth - width - 8, centerX - width * 0.5)))
+    local textLeft = x + iconSize + iconGap
+    local textCenter = textLeft + messageWidth * 0.5
+
+    if icon then
+        UIManager.DrawTexture(icon, x, y + math.floor((lineHeight - iconSize) * 0.5), iconSize, iconSize, 1)
+    end
+    for _, offset in ipairs(SHADOW_OFFSETS) do
+        text:DrawStringCentre(font, textCenter + offset[1], y + offset[2], message, 0, 0, 0, 1)
+    end
+    text:DrawStringCentre(font, textCenter, y, message, colour[1], colour[2], colour[3], 1)
+    if arrow then
+        UIManager.DrawTexture(arrow, textLeft + messageWidth + arrowGap,
+            y + math.floor((lineHeight - arrowSize) * 0.5), arrowSize, arrowSize, 1)
+    end
+
+    return mergeBounds(nil, x, y, width, lineHeight), y + lineHeight + 3
+end
+
+local function drawCompactAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
+        text, screenWidth, centerX, startY)
+    local bounds
+    local y = startY
+    for _, warning in ipairs(alertWarnings) do
+        local message = string.upper(STANCE_LABELS[warning.stance] or "Hostile")
+            .. " A-LIFE (" .. tostring(warning.count) .. ") - "
+            .. tostring(math.floor(warning.distance + 0.5)) .. " TILES"
+        if warning.firearmCarriers and warning.firearmCarriers > 0 then
+            message = message .. " - " .. tostring(warning.firearmCarriers) .. " ARMED"
+        end
+        local lineBounds, nextY = drawCompactAlertLine(
+            text, screenWidth, centerX, y, message, STANCE_COLOURS[warning.stance],
+            "alife", warning.stance, warning.direction, warning.showArrow
+        )
+        bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
+            lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
+        y = nextY
+    end
+
+    if zombieWarning then
+        local message = "ZOMBIES OUT OF SIGHT (" .. tostring(zombieWarning.count) .. ") - "
+            .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " TILES"
+        local lineBounds, nextY = drawCompactAlertLine(
+            text, screenWidth, centerX, y, message, { 1, 0.2, 0.08 }, "zombie",
+            "hostile", zombieWarning.direction, true
+        )
+        bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
+            lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
+        y = nextY
+    end
+
+    if sprinterWarning then
+        local message = "SPRINTERS NEARBY (" .. tostring(sprinterWarning.count) .. ") - "
+            .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
+        local lineBounds, nextY = drawCompactAlertLine(
+            text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 }, "zombie",
+            "hostile", sprinterWarning.direction, true
+        )
+        bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
+            lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
+        y = nextY
+    end
+
+    return bounds, y
+end
+
+local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
+        headerTexture, bodyTexture,
+        text, screenWidth, centerX, startY)
+    local bounds
+    local y = startY
+    for _, warning in ipairs(alertWarnings) do
+        local extraDetail
+        if warning.firearmCarriers and warning.firearmCarriers > 0 then
+            extraDetail = tostring(warning.firearmCarriers)
+                .. (warning.firearmCarriers == 1 and " firearm carrier nearby"
+                    or " firearm carriers nearby")
+        end
+        local nextY, x, width, height = drawNeatAlertCard(
+            headerTexture, bodyTexture, text, screenWidth, centerX, y,
+            warningTitle(warning, false),
+            "Distance: " .. tostring(math.floor(warning.distance + 0.5)) .. " tiles",
+            extraDetail, warning.stance, warning.direction,
+            warning.showArrow, STANCE_COLOURS[warning.stance], "alife"
+        )
+        bounds = mergeBounds(bounds, x, y, width, height)
+        y = nextY
+    end
+
+    if zombieWarning then
+        local title = "Zombies out of sight (" .. tostring(zombieWarning.count) .. ")"
+        local nextY, x, width, height = drawNeatAlertCard(
+            headerTexture, bodyTexture, text, screenWidth, centerX, y,
+            title,
+            "Nearest zombie: " .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " tiles",
+            nil, "hostile", zombieWarning.direction, true,
+            { 1, 0.2, 0.16 }, "zombie"
+        )
+        bounds = mergeBounds(bounds, x, y, width, height)
+        y = nextY
+    end
+
+    if sprinterWarning then
+        local title = "Sprinters nearby (" .. tostring(sprinterWarning.count) .. ")"
+        local _, x, width, height = drawNeatAlertCard(
+            headerTexture, bodyTexture, text, screenWidth, centerX, y,
+            title,
+            "Nearest sprinter: " .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles",
+            nil, "hostile", sprinterWarning.direction, true,
+            { 1, 0.28, 0.08 }, "zombie"
+        )
+        bounds = mergeBounds(bounds, x, y, width, height)
+    end
+
+    return bounds
 end
 
 local function isBlockedBetweenSquares(firstSquare, secondSquare)
@@ -661,6 +1174,9 @@ end
 local function scanNearbyThreats()
     warnings = {}
     rearZombieWarning = nil
+    sprinterWarning = nil
+    sprinterZombieIDs = {}
+    closeHostileNPCs = {}
     local stanceEnabled = {}
     local warnALifeNPCs = false
     for _, stance in ipairs(STANCE_PRIORITY) do
@@ -669,14 +1185,17 @@ local function scanNearbyThreats()
         warnALifeNPCs = warnALifeNPCs or enabled
     end
     local warnRearZombies = getOption("EnableRearZombieWarning", true)
-    if not warnALifeNPCs and not warnRearZombies then return end
+    local warnSprinters = getOption("EnableSprinterWarning", true)
+    local warnCloseHostileAlarm = getOption("EnableCloseHostileAlarm", true)
+    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm and not warnSprinters then return end
 
     local project = ProjectALife
     if type(project) ~= "table" then
         project = nil
         warnALifeNPCs = false
+        warnCloseHostileAlarm = false
     end
-    if not warnALifeNPCs and not warnRearZombies then return end
+    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm and not warnSprinters then return end
     local player = getSpecificPlayer(0)
     if player == nil or player:isDead() then return end
     if disableAlertsInVehicle and playerInVehicle then return end
@@ -695,15 +1214,23 @@ local function scanNearbyThreats()
     end
     local range = warnALifeNPCs and warningRange() or 0
     local rangeSquared = range * range
+    local closeHostileRange = warnCloseHostileAlarm and closeHostileAlarmRange() or 0
+    local closeHostileRangeSquared = closeHostileRange * closeHostileRange
     local rearRange = warnRearZombies and rearZombieWarningRange(player) or 0
     local rearRangeSquared = rearRange * rearRange
+    local sprinterRange = warnSprinters and sprinterWarningRange() or 0
+    local sprinterRangeSquared = sprinterRange * sprinterRange
     local rearAngleCos = math.cos(math.rad(rearZombieWarningAngle() * 0.5))
-    local scanRangeSquared = math.max(rangeSquared, rearRangeSquared)
+    local scanRangeSquared = math.max(rangeSquared, rearRangeSquared,
+        closeHostileRangeSquared, sprinterRangeSquared)
     local showDirectionArrow = getOption("ShowDirectionArrow", true)
     local showFirearmWarning = getOption("ShowFirearmWarning", false)
     local ignoreFallenZombies = getOption("IgnoreFallenZombies", false)
     local rearZombieSameFloorOnly = getOption("RearZombieSameFloorOnly", true)
     local rearZombieRequireLineOfSight = getOption("RearZombieRequireLineOfSight", true)
+    local sprinterSameFloorOnly = getOption("SprinterSameFloorOnly", true)
+    local sprinterRequireLineOfSight = getOption("SprinterRequireLineOfSight", true)
+    local sprinterIgnoreFallen = getOption("SprinterIgnoreFallen", true)
     local threatsByStance = {}
     for _, stance in ipairs(STANCE_PRIORITY) do
         threatsByStance[stance] = {
@@ -716,13 +1243,18 @@ local function scanNearbyThreats()
     local rearZombies = 0
     local nearestRearZombie = rearRangeSquared
     local nearestRearZombieDirection
+    local sprinters = 0
+    local nearestSprinter = sprinterRangeSquared
+    local nearestSprinterDirection
     for index = 0, list:size() - 1 do
         local shell = list:get(index)
         if shell ~= nil and not shell:isDead() then
             local x, y, z = shell:getX(), shell:getY(), shell:getZ()
             local dx, dy = x - px, y - py
             local distanceSquared = dx * dx + dy * dy
-            if math.abs(z - pz) <= 1 and distanceSquared <= scanRangeSquared then
+            local nearbyFloor = math.abs(z - pz) <= 1
+                or (warnSprinters and not sprinterSameFloorOnly)
+            if nearbyFloor and distanceSquared <= scanRangeSquared then
                 local rearCandidate = false
                 if warnRearZombies and distanceSquared <= rearRangeSquared then
                     local fallen = false
@@ -742,9 +1274,28 @@ local function scanNearbyThreats()
                             )
                     end
                 end
-                local alifeCandidate = warnALifeNPCs and distanceSquared <= rangeSquared
+                local closeHostileCandidate = warnCloseHostileAlarm
+                    and distanceSquared <= closeHostileRangeSquared
+                local sprinterCandidate = warnSprinters
+                    and distanceSquared <= sprinterRangeSquared
+                    and isSprinter(shell)
+                if sprinterCandidate and sprinterIgnoreFallen then
+                    local ok, onFloor = pcall(function() return shell:isOnFloor() end)
+                    if ok and onFloor == true then sprinterCandidate = false end
+                end
+                if sprinterCandidate then
+                    sprinterCandidate = passesRearZombieVisibilityFilters(
+                        shell,
+                        playerSquare,
+                        cell,
+                        sprinterSameFloorOnly,
+                        sprinterRequireLineOfSight
+                    )
+                end
+                local alifeCandidate = (warnALifeNPCs and distanceSquared <= rangeSquared)
+                    or closeHostileCandidate
                 local uid
-                if project and (rearCandidate or alifeCandidate) then
+                if project and (rearCandidate or alifeCandidate or sprinterCandidate) then
                     uid = uidOf(project, shell)
                 end
 
@@ -756,11 +1307,23 @@ local function scanNearbyThreats()
                     end
                 end
 
+                if sprinterCandidate and uid == nil then
+                    sprinters = sprinters + 1
+                    sprinterZombieIDs[zombieAlertId(shell)] = true
+                    if sprinters == 1 or distanceSquared < nearestSprinter then
+                        nearestSprinter = distanceSquared
+                        nearestSprinterDirection = directionSector(dx, dy, forwardX, forwardY)
+                    end
+                end
+
                 if alifeCandidate and uid ~= nil then
                     local record = actorFor(project, uid)
                     if record then
                         local stance = stanceOf(project, record, player)
-                        if stanceEnabled[stance] then
+                        if closeHostileCandidate and stance == "hostile" then
+                            closeHostileNPCs[uid] = true
+                        end
+                        if warnALifeNPCs and distanceSquared <= rangeSquared and stanceEnabled[stance] then
                             local threat = threatsByStance[stance]
                             if threat then
                                 threat.count = threat.count + 1
@@ -807,6 +1370,13 @@ local function scanNearbyThreats()
             direction = nearestRearZombieDirection,
         }
     end
+    if sprinters > 0 then
+        sprinterWarning = {
+            count = sprinters,
+            distance = math.sqrt(nearestSprinter),
+            direction = nearestSprinterDirection,
+        }
+    end
 end
 
 local lastAlarmSignature = ""
@@ -818,20 +1388,31 @@ local function warningSignature()
         parts[#parts + 1] = warning.stance
     end
     if rearZombieWarning then parts[#parts + 1] = "rear-zombies" end
+    if sprinterWarning then parts[#parts + 1] = "sprinters" end
     return table.concat(parts, "|")
 end
 
 local function alarmSignature()
     if getOption("ZombieAlarmOnly", true) then
-        return rearZombieWarning and "rear-zombies" or ""
+        local parts = {}
+        if rearZombieWarning then parts[#parts + 1] = "rear-zombies" end
+        if sprinterWarning then parts[#parts + 1] = "sprinters" end
+        return table.concat(parts, "|")
     end
     return warningSignature()
 end
 
-local function playAlarmSound()
-    local index = math.floor(tonumber(getOption("AlarmSound", 3)) or 3)
+local function playAlarmSound(soundOption, volumeOption)
+    local defaultSound = DEFAULT_ALARM_SOUND
+    if soundOption == "CloseHostileAlarmSound" then
+        defaultSound = DEFAULT_CLOSE_HOSTILE_ALARM_SOUND
+    elseif soundOption == "SprinterAlarmSound" then
+        defaultSound = DEFAULT_SPRINTER_ALARM_SOUND
+    end
+    local index = math.floor(tonumber(getOption(soundOption or "AlarmSound", defaultSound)) or defaultSound)
     local sound = ALARM_SOUND_IDS[index] or ALARM_SOUND_IDS[1]
-    local volume = tonumber(getOption("AlarmVolume", DEFAULT_ALARM_VOLUME)) or DEFAULT_ALARM_VOLUME
+    local volume = tonumber(getOption(volumeOption or "AlarmVolume", DEFAULT_ALARM_VOLUME))
+        or DEFAULT_ALARM_VOLUME
     volume = math.max(0, math.min(MAX_ALARM_VOLUME, volume))
     if activeAlarmSound then
         pcall(function()
@@ -856,7 +1437,12 @@ local function updateWarning()
     if not ok then
         warnings = {}
         rearZombieWarning = nil
+        sprinterWarning = nil
+        sprinterZombieIDs = {}
+        closeHostileNPCs = {}
         lastAlarmSignature = ""
+        lastCloseHostileNPCs = {}
+        lastSprinterZombieIDs = {}
         if not errorLogged then
             print("[Viewpoint Threat Detector] Detection failed: " .. tostring(err))
             errorLogged = true
@@ -865,25 +1451,129 @@ local function updateWarning()
     end
 
     local signature = alarmSignature()
+    local alarmSoundsEnabled = getOption("EnableAlarmSound", true)
+    local closeHostileAlarmEnabled = alarmSoundsEnabled
+        and getOption("EnableCloseHostileAlarm", true)
+    local sprinterAlarmEnabled = alarmSoundsEnabled
+        and getOption("EnableSprinterWarning", true)
+        and getOption("EnableSprinterAlarm", true)
+    local closeHostileAlarmEntered = false
+    if closeHostileAlarmEnabled then
+        for uid in pairs(closeHostileNPCs) do
+            if not lastCloseHostileNPCs[uid] then
+                closeHostileAlarmEntered = true
+                break
+            end
+        end
+    end
+    local sprinterAlarmEntered = false
+    if sprinterAlarmEnabled then
+        for id in pairs(sprinterZombieIDs) do
+            if not lastSprinterZombieIDs[id] then
+                sprinterAlarmEntered = true
+                break
+            end
+        end
+    end
     if signature ~= "" and signature ~= lastAlarmSignature
-            and getOption("EnableAlarmSound", true) then
+            and alarmSoundsEnabled and not closeHostileAlarmEntered and not sprinterAlarmEntered then
         playAlarmSound()
     end
+    if sprinterAlarmEntered then
+        playAlarmSound("SprinterAlarmSound", "SprinterAlarmVolume")
+    elseif closeHostileAlarmEntered then
+        playAlarmSound("CloseHostileAlarmSound", "CloseHostileAlarmVolume")
+    end
     lastAlarmSignature = signature
+    lastCloseHostileNPCs = closeHostileAlarmEnabled and closeHostileNPCs or {}
+    lastSprinterZombieIDs = sprinterAlarmEnabled and sprinterZombieIDs or {}
 end
 
 local function drawWarning()
     if disableAlertsInVehicle and playerInVehicle then
         warnings = {}
         rearZombieWarning = nil
+        sprinterWarning = nil
+        sprinterZombieIDs = {}
+        closeHostileNPCs = {}
         lastAlarmSignature = ""
+        lastCloseHostileNPCs = {}
+        lastSprinterZombieIDs = {}
         updateAlertDragHandle(nil, 0, 0)
+        updateAlertDragHandle(nil, 0, 0, "zombie")
         return
     end
-    if #warnings == 0 and rearZombieWarning == nil then
+    if #warnings == 0 and rearZombieWarning == nil and sprinterWarning == nil then
         updateAlertDragHandle(nil, 0, 0)
+        updateAlertDragHandle(nil, 0, 0, "zombie")
         return
     end
+
+    local minimalUI = getOption("MinimalAlertUI", false)
+    local separatePositions = getOption("SeparateAlertPositions", false)
+    if minimalUI or separatePositions then
+        local ok, err = pcall(function()
+            local core = getCore()
+            local screenWidth = core:getScreenWidth()
+            local screenHeight = core:getScreenHeight()
+            local text = getTextManager()
+            local headerTexture = not minimalUI and neatPanelTexture(NEAT_PANEL_HEADER_TEXTURE) or nil
+            local bodyTexture = not minimalUI and neatPanelTexture(NEAT_PANEL_BODY_TEXTURE) or nil
+            local useNeat = headerTexture ~= nil and bodyTexture ~= nil
+
+            local function drawGroup(alertWarnings, zombieWarning, sprinterAlert, kind, defaultY)
+                local centerX, startY = alertAnchor(kind, screenWidth, screenHeight, defaultY)
+                local bounds
+                if useNeat then
+                    bounds = drawNeatAlertGroup(
+                        alertWarnings, zombieWarning, sprinterAlert, headerTexture, bodyTexture,
+                        text, screenWidth, centerX, startY
+                    )
+                else
+                    bounds = drawCompactAlertGroup(
+                        alertWarnings, zombieWarning, sprinterAlert,
+                        text, screenWidth, centerX, startY
+                    )
+                end
+                updateAlertDragHandle(bounds, screenWidth, screenHeight, kind)
+                return bounds
+            end
+
+            if separatePositions then
+                local alifeBounds = drawGroup(warnings, nil, nil, "alife", 24)
+                local zombieDefaultY = alifeBounds and alifeBounds.bottom + 12 or 24
+                drawGroup({}, rearZombieWarning, sprinterWarning, "zombie", zombieDefaultY)
+            else
+                local centerX, startY = alertAnchor("alife", screenWidth, screenHeight)
+                local bounds
+                if useNeat then
+                    bounds = drawNeatAlertGroup(
+                        warnings, rearZombieWarning, sprinterWarning,
+                        headerTexture, bodyTexture,
+                        text, screenWidth, centerX, startY
+                    )
+                else
+                    bounds = drawCompactAlertGroup(
+                        warnings, rearZombieWarning, sprinterWarning,
+                        text, screenWidth, centerX, startY
+                    )
+                end
+                updateAlertDragHandle(bounds, screenWidth, screenHeight, "alife")
+                updateAlertDragHandle(nil, screenWidth, screenHeight, "zombie")
+            end
+        end)
+        if not ok then
+            updateAlertDragHandle(nil, 0, 0)
+            updateAlertDragHandle(nil, 0, 0, "zombie")
+            if not errorLogged then
+                print("[Viewpoint Threat Detector] Warning display failed: " .. tostring(err))
+                errorLogged = true
+            end
+        end
+        return
+    end
+
+    updateAlertDragHandle(nil, 0, 0, "zombie")
     local ok, err = pcall(function()
         local core = getCore()
         local screenWidth = core:getScreenWidth()
@@ -925,6 +1615,18 @@ local function drawWarning()
                         "Nearest zombie: " .. tostring(math.floor(rearZombieWarning.distance + 0.5)) .. " tiles",
                         nil, "hostile", rearZombieWarning.direction, true,
                         { 1, 0.2, 0.16 }, "zombie"
+                    )
+                    neatBounds = mergeBounds(neatBounds, x, y, width, height)
+                    y = y + height + 6
+                end
+                if sprinterWarning then
+                    local title = "Sprinters nearby (" .. tostring(sprinterWarning.count) .. ")"
+                    local _, x, width, height = drawNeatAlertCard(
+                        headerTexture, bodyTexture, text, screenWidth, centerX, y,
+                        title,
+                        "Nearest sprinter: " .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles",
+                        nil, "hostile", sprinterWarning.direction, true,
+                        { 1, 0.28, 0.08 }, "zombie"
                     )
                     neatBounds = mergeBounds(neatBounds, x, y, width, height)
                 end
@@ -1045,6 +1747,18 @@ local function drawWarning()
             end
         end
 
+        if sprinterWarning then
+            local message = "SPRINTERS NEARBY (" .. tostring(sprinterWarning.count) .. ") - "
+                .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
+            local y = bounds and bounds.bottom + 4 or nextWarningY
+            local lineBounds = drawCompactAlertLine(
+                text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 },
+                "zombie", "hostile", sprinterWarning.direction, true
+            )
+            bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
+                lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
+        end
+
         updateAlertDragHandle(bounds, screenWidth, screenHeight)
     end)
     if not ok and not errorLogged then
@@ -1057,6 +1771,8 @@ local ticks = 0
 if Events and Events.OnTick then
     Events.OnTick.Add(function()
         ticks = ticks + 1
+        dragDiagnosticsEnabled = getOption("EnableDragDiagnostics", false) == true
+        updateGlobalAlertDrag()
         disableAlertsInVehicle = getOption("DisableInVehicle", true)
         playerInVehicle = false
         if disableAlertsInVehicle then
