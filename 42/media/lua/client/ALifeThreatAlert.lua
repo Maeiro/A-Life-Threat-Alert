@@ -586,7 +586,59 @@ local function updateAlertDragHandle(bounds, screenWidth, screenHeight)
     handle:setVisible(true)
 end
 
-local function passesRearZombieVisibilityFilters(zombie, playerSquare, sameFloorOnly, requireLineOfSight)
+local function isBlockedBetweenSquares(firstSquare, secondSquare)
+    return firstSquare:isBlockedTo(secondSquare) or secondSquare:isBlockedTo(firstSquare)
+end
+
+local function hasClearLineOnSameFloor(startSquare, targetSquare, cell)
+    local startX, startY = startSquare:getX(), startSquare:getY()
+    local targetX, targetY = targetSquare:getX(), targetSquare:getY()
+    local deltaX, deltaY = targetX - startX, targetY - startY
+    local stepX = deltaX < 0 and -1 or 1
+    local stepY = deltaY < 0 and -1 or 1
+    local absDeltaX, absDeltaY = math.abs(deltaX), math.abs(deltaY)
+    local maxX = absDeltaX > 0 and 0.5 / absDeltaX or math.huge
+    local maxY = absDeltaY > 0 and 0.5 / absDeltaY or math.huge
+    local deltaMaxX = absDeltaX > 0 and 1 / absDeltaX or math.huge
+    local deltaMaxY = absDeltaY > 0 and 1 / absDeltaY or math.huge
+    local x, y = startX, startY
+    local currentSquare = startSquare
+    local z = startSquare:getZ()
+
+    while x ~= targetX or y ~= targetY do
+        if maxX < maxY then
+            x = x + stepX
+            maxX = maxX + deltaMaxX
+            local nextSquare = cell:getGridSquare(x, y, z)
+            if nextSquare == nil or isBlockedBetweenSquares(currentSquare, nextSquare) then return false end
+            currentSquare = nextSquare
+        elseif maxY < maxX then
+            y = y + stepY
+            maxY = maxY + deltaMaxY
+            local nextSquare = cell:getGridSquare(x, y, z)
+            if nextSquare == nil or isBlockedBetweenSquares(currentSquare, nextSquare) then return false end
+            currentSquare = nextSquare
+        else
+            local sideX = cell:getGridSquare(x + stepX, y, z)
+            local sideY = cell:getGridSquare(x, y + stepY, z)
+            local nextSquare = cell:getGridSquare(x + stepX, y + stepY, z)
+            if sideX == nil or sideY == nil or nextSquare == nil then return false end
+            local pathXClear = not isBlockedBetweenSquares(currentSquare, sideX)
+                and not isBlockedBetweenSquares(sideX, nextSquare)
+            local pathYClear = not isBlockedBetweenSquares(currentSquare, sideY)
+                and not isBlockedBetweenSquares(sideY, nextSquare)
+            if not pathXClear and not pathYClear then return false end
+            x, y = x + stepX, y + stepY
+            maxX = maxX + deltaMaxX
+            maxY = maxY + deltaMaxY
+            currentSquare = nextSquare
+        end
+    end
+
+    return true
+end
+
+local function passesRearZombieVisibilityFilters(zombie, playerSquare, cell, sameFloorOnly, requireLineOfSight)
     if not sameFloorOnly and not requireLineOfSight then return true end
     if playerSquare == nil then return false end
 
@@ -594,7 +646,13 @@ local function passesRearZombieVisibilityFilters(zombie, playerSquare, sameFloor
         local zombieSquare = zombie:getCurrentSquare()
         if zombieSquare == nil then return false end
         if sameFloorOnly and zombieSquare:getZ() ~= playerSquare:getZ() then return false end
-        if requireLineOfSight and zombieSquare:isBlockedTo(playerSquare) then return false end
+        if requireLineOfSight then
+            if zombieSquare:getZ() == playerSquare:getZ() then
+                if not hasClearLineOnSameFloor(zombieSquare, playerSquare, cell) then return false end
+            elseif isBlockedBetweenSquares(zombieSquare, playerSquare) then
+                return false
+            end
+        end
         return true
     end)
     return ok and passes
@@ -678,6 +736,7 @@ local function scanNearbyThreats()
                             and passesRearZombieVisibilityFilters(
                                 shell,
                                 playerSquare,
+                                cell,
                                 rearZombieSameFloorOnly,
                                 rearZombieRequireLineOfSight
                             )
