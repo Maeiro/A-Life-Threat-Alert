@@ -5,6 +5,8 @@ local MOD_ID = "ALifeThreatAlert"
 local DEFAULT_RANGE = 40
 local DEFAULT_REAR_ZOMBIE_RANGE = 20
 local DEFAULT_REAR_ZOMBIE_ANGLE = 180
+local DEFAULT_ALARM_VOLUME = 150
+local MAX_ALARM_VOLUME = 200
 local MIN_RANGE = 5
 local MAX_RANGE = 100
 local MIN_REAR_ZOMBIE_ANGLE = 30
@@ -90,6 +92,18 @@ if PZAPI and PZAPI.ModOptions then
     )
     modOptions:addTickBox("EnableRearZombieWarning", "Warn when zombies are behind you", true)
     modOptions:addTickBox(
+        "RearZombieSameFloorOnly",
+        "Detect rear zombies only on the same floor",
+        true,
+        "When enabled, zombies on other floors do not trigger rear warnings."
+    )
+    modOptions:addTickBox(
+        "RearZombieRequireLineOfSight",
+        "Require a clear path to rear zombies",
+        true,
+        "When enabled, walls and closed doors block rear zombie warnings."
+    )
+    modOptions:addTickBox(
         "IgnoreFallenZombies",
         "Ignore fallen zombies in rear warnings",
         false,
@@ -122,17 +136,32 @@ if PZAPI and PZAPI.ModOptions then
     modOptions:addTickBox(
         "EnableAlarmSound",
         "Play an alarm sound for new threats",
-        false,
-        "Uses sound files bundled with Viewpoint Threat Detector; no other mod is required."
+        true,
+        "Enabled by default. Uses sounds bundled with Viewpoint Threat Detector."
+    )
+    modOptions:addSlider(
+        "AlarmVolume",
+        "Alarm volume (%)",
+        0,
+        MAX_ALARM_VOLUME,
+        10,
+        DEFAULT_ALARM_VOLUME,
+        "Volume multiplier for this mod's alarm sounds. The default is louder than before."
+    )
+    modOptions:addTickBox(
+        "ZombieAlarmOnly",
+        "Play alarm only for zombie warnings",
+        true,
+        "When enabled, A-Life NPC alerts do not trigger alarm sounds."
     )
     local alarmSoundOption = modOptions:addComboBox(
         "AlarmSound",
         "Alarm sound",
         "Choose the alarm cue used when a new threat appears."
     )
-    alarmSoundOption:addItem("Radar ping", true)
+    alarmSoundOption:addItem("Radar ping", false)
     alarmSoundOption:addItem("Siren", false)
-    alarmSoundOption:addItem("Heartbeat", false)
+    alarmSoundOption:addItem("Heartbeat", true)
     alarmSoundOption:addItem("Soft beep", false)
 end
 
@@ -557,6 +586,20 @@ local function updateAlertDragHandle(bounds, screenWidth, screenHeight)
     handle:setVisible(true)
 end
 
+local function passesRearZombieVisibilityFilters(zombie, playerSquare, sameFloorOnly, requireLineOfSight)
+    if not sameFloorOnly and not requireLineOfSight then return true end
+    if playerSquare == nil then return false end
+
+    local ok, passes = pcall(function()
+        local zombieSquare = zombie:getCurrentSquare()
+        if zombieSquare == nil then return false end
+        if sameFloorOnly and zombieSquare:getZ() ~= playerSquare:getZ() then return false end
+        if requireLineOfSight and zombieSquare:isBlockedTo(playerSquare) then return false end
+        return true
+    end)
+    return ok and passes
+end
+
 local function scanNearbyThreats()
     warnings = {}
     rearZombieWarning = nil
@@ -579,6 +622,7 @@ local function scanNearbyThreats()
     local player = getSpecificPlayer(0)
     if player == nil or player:isDead() then return end
     if disableAlertsInVehicle and playerInVehicle then return end
+    local playerSquare = player:getCurrentSquare()
     local cell = getCell()
     local list = cell and cell:getZombieList() or nil
     if list == nil then return end
@@ -600,6 +644,8 @@ local function scanNearbyThreats()
     local showDirectionArrow = getOption("ShowDirectionArrow", true)
     local showFirearmWarning = getOption("ShowFirearmWarning", false)
     local ignoreFallenZombies = getOption("IgnoreFallenZombies", false)
+    local rearZombieSameFloorOnly = getOption("RearZombieSameFloorOnly", true)
+    local rearZombieRequireLineOfSight = getOption("RearZombieRequireLineOfSight", true)
     local threatsByStance = {}
     for _, stance in ipairs(STANCE_PRIORITY) do
         threatsByStance[stance] = {
@@ -629,6 +675,12 @@ local function scanNearbyThreats()
                     if not fallen then
                         local forwardDot = dx * forwardX + dy * forwardY
                         rearCandidate = -forwardDot >= math.sqrt(distanceSquared) * rearAngleCos
+                            and passesRearZombieVisibilityFilters(
+                                shell,
+                                playerSquare,
+                                rearZombieSameFloorOnly,
+                                rearZombieRequireLineOfSight
+                            )
                     end
                 end
                 local alifeCandidate = warnALifeNPCs and distanceSquared <= rangeSquared
@@ -699,6 +751,7 @@ local function scanNearbyThreats()
 end
 
 local lastAlarmSignature = ""
+local activeAlarmSound
 
 local function warningSignature()
     local parts = {}
@@ -709,21 +762,33 @@ local function warningSignature()
     return table.concat(parts, "|")
 end
 
+local function alarmSignature()
+    if getOption("ZombieAlarmOnly", true) then
+        return rearZombieWarning and "rear-zombies" or ""
+    end
+    return warningSignature()
+end
+
 local function playAlarmSound()
-    local index = math.floor(tonumber(getOption("AlarmSound", 1)) or 1)
+    local index = math.floor(tonumber(getOption("AlarmSound", 3)) or 3)
     local sound = ALARM_SOUND_IDS[index] or ALARM_SOUND_IDS[1]
-    local played = false
+    local volume = tonumber(getOption("AlarmVolume", DEFAULT_ALARM_VOLUME)) or DEFAULT_ALARM_VOLUME
+    volume = math.max(0, math.min(MAX_ALARM_VOLUME, volume))
+    if activeAlarmSound then
+        pcall(function()
+            getSoundManager():stopUISound(activeAlarmSound)
+        end)
+        activeAlarmSound = nil
+    end
 
-    pcall(function()
-        local world = getWorld()
-        local emitter = world and world:getFreeEmitter()
-        if not emitter then return end
-        local soundInstance = emitter:playSoundImpl(sound, false, nil)
-        played = soundInstance ~= nil and soundInstance ~= 0
+    local ok, soundInstance = pcall(function()
+        return getSoundManager():playUISound(sound)
     end)
-
-    if not played then
-        pcall(function() getSoundManager():playUISound(sound) end)
+    if ok and soundInstance ~= nil and soundInstance ~= 0 then
+        activeAlarmSound = soundInstance
+        pcall(function()
+            getSoundManager():getUIEmitter():setVolume(soundInstance, volume / 100)
+        end)
     end
 end
 
@@ -740,9 +805,9 @@ local function updateWarning()
         return
     end
 
-    local signature = warningSignature()
+    local signature = alarmSignature()
     if signature ~= "" and signature ~= lastAlarmSignature
-            and getOption("EnableAlarmSound", false) then
+            and getOption("EnableAlarmSound", true) then
         playAlarmSound()
     end
     lastAlarmSignature = signature
