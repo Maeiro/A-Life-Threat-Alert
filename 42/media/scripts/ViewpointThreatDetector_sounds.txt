@@ -35,4 +35,148 @@ module Base
             volume = 0.8,
         }
     }
+
+    sound ViewpointThreatDetectorSonarPing
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/sonar_ping.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorShortAlarm
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/short_alarm.ogg,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceAnchorAction
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_anchor_action.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceExit
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_exit.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceLink
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_link.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceMagnetAction
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_magnet_action.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceMagnetOff
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_magnet_off.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceMagnetOn
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_magnet_on.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceMagnetStart
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_magnet_start.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpacePart
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_part.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceUnlink
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_unlink.wav,
+            volume = 1.0,
+        }
+    }
+
+    sound ViewpointThreatDetectorSpaceWall
+    {
+        category = UI,
+        loop = false,
+        is3D = false,
+        clip
+        {
+            file = media/sound/ViewpointThreatDetector/space_wall.wav,
+            volume = 1.0,
+        }
+    }
 }

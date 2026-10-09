@@ -21,11 +21,29 @@ local MAX_REAR_ZOMBIE_ANGLE = 360
 local REAR_ZOMBIE_ANGLE_STEP = 5
 local ALERT_POSITION_FILE = "ViewpointThreatDetectorPosition.txt"
 local ZOMBIE_ALERT_POSITION_FILE = "ViewpointThreatDetectorZombiePosition.txt"
-local ALARM_SOUND_IDS = {
-    "ViewpointThreatDetectorRadarPing",
-    "ViewpointThreatDetectorHeartbeat",
-    "ViewpointThreatDetectorSoftBeep",
+local ALARM_SOUND_OPTIONS = {
+    { id = "ViewpointThreatDetectorRadarPing", label = "Radar ping" },
+    { id = "ViewpointThreatDetectorHeartbeat", label = "Heartbeat" },
+    { id = "ViewpointThreatDetectorSoftBeep", label = "Soft beep" },
+    { id = "ViewpointThreatDetectorSonarPing", label = "Sonar ping" },
+    { id = "ViewpointThreatDetectorShortAlarm", label = "Short alarm" },
+    { id = "ViewpointThreatDetectorSpaceAnchorAction", label = "Space - Anchor action" },
+    { id = "ViewpointThreatDetectorSpaceExit", label = "Space - Exit" },
+    { id = "ViewpointThreatDetectorSpaceLink", label = "Space - Link" },
+    { id = "ViewpointThreatDetectorSpaceMagnetAction", label = "Space - Magnet action" },
+    { id = "ViewpointThreatDetectorSpaceMagnetOff", label = "Space - Magnet off" },
+    { id = "ViewpointThreatDetectorSpaceMagnetOn", label = "Space - Magnet on" },
+    { id = "ViewpointThreatDetectorSpaceMagnetStart", label = "Space - Magnet start" },
+    { id = "ViewpointThreatDetectorSpacePart", label = "Space - Part" },
+    { id = "ViewpointThreatDetectorSpaceUnlink", label = "Space - Unlink" },
+    { id = "ViewpointThreatDetectorSpaceWall", label = "Space - Wall" },
 }
+
+local function addAlarmSoundOptions(option, defaultIndex)
+    for index, soundOption in ipairs(ALARM_SOUND_OPTIONS) do
+        option:addItem(soundOption.label, index == defaultIndex)
+    end
+end
 local SCAN_INTERVAL = 5
 local STANCES = { allied = true, friendly = true, neutral = true, careful = true, hostile = true }
 local STANCE_PRIORITY = { "hostile", "careful", "neutral", "friendly", "allied" }
@@ -292,25 +310,19 @@ if PZAPI and PZAPI.ModOptions then
         "Alarm sound",
         "Choose the alarm cue used when a new threat appears."
     )
-    alarmSoundOption:addItem("Radar ping", false)
-    alarmSoundOption:addItem("Heartbeat", true)
-    alarmSoundOption:addItem("Soft beep", false)
+    addAlarmSoundOptions(alarmSoundOption, DEFAULT_ALARM_SOUND)
     local closeHostileAlarmSoundOption = modOptions:addComboBox(
         "CloseHostileAlarmSound",
         "Close Hostile A-Life alarm sound",
         "Choose a distinct sound cue for Hostile A-Life NPCs that enter the close range."
     )
-    closeHostileAlarmSoundOption:addItem("Radar ping", true)
-    closeHostileAlarmSoundOption:addItem("Heartbeat", false)
-    closeHostileAlarmSoundOption:addItem("Soft beep", false)
+    addAlarmSoundOptions(closeHostileAlarmSoundOption, DEFAULT_CLOSE_HOSTILE_ALARM_SOUND)
     local sprinterAlarmSoundOption = modOptions:addComboBox(
         "SprinterAlarmSound",
         "Sprinter alarm sound",
         "Choose a distinct sound cue for sprinters entering range."
     )
-    sprinterAlarmSoundOption:addItem("Radar ping", false)
-    sprinterAlarmSoundOption:addItem("Heartbeat", false)
-    sprinterAlarmSoundOption:addItem("Soft beep", true)
+    addAlarmSoundOptions(sprinterAlarmSoundOption, DEFAULT_SPRINTER_ALARM_SOUND)
     modOptions:addSlider(
         "CloseHostileAlarmVolume",
         "Close Hostile A-Life alarm volume (%)",
@@ -1841,7 +1853,8 @@ playAlarmSound = function(soundOption, volumeOption, selectedSound, selectedVolu
     end
     local index = math.floor(tonumber(selectedSound)
         or tonumber(getOption(soundOption or "AlarmSound", defaultSound)) or defaultSound)
-    local sound = ALARM_SOUND_IDS[index] or ALARM_SOUND_IDS[1]
+    local soundOption = ALARM_SOUND_OPTIONS[index] or ALARM_SOUND_OPTIONS[1]
+    local sound = soundOption.id
     local volume = tonumber(selectedVolume)
         or tonumber(getOption(volumeOption or "AlarmVolume", DEFAULT_ALARM_VOLUME))
         or DEFAULT_ALARM_VOLUME

@@ -12,3 +12,15 @@ https://opengameart.org/content/heartbeat-sounds
 Soft beep
 "Beep Tone Sound SFX" by qubodup, licensed under CC0.
 https://lpc.opengameart.org/content/beep-tone-sound-sfx
+
+Sonar ping
+"Sonar Ping" by Spiceman, licensed under CC0.
+https://opengameart.org/content/sonar-ping
+
+Short alarm
+"Short alarm" by yd, licensed under CC0.
+https://lpc.opengameart.org/content/short-alarm
+
+Space alert sounds
+Selected clips from "Atmospheric Interaction Sound Pack" by legoluft, licensed under CC0.
+https://opengameart.org/content/atmospheric-interaction-sound-pack
