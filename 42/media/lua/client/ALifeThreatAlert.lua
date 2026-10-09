@@ -75,6 +75,7 @@ local STANCE_COLOURS = {
     careful = { 1, 0.82, 0.12 },
     hostile = { 1, 0.2, 0.16 },
 }
+local SPRINTER_COLOUR = { 130 / 255, 0, 129 / 255 }
 local SHADOW_OFFSETS = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
 local typeIconTextureCache = {}
 local neatPanelTextureCache = {}
@@ -226,6 +227,12 @@ if PZAPI and PZAPI.ModOptions then
     )
 
     modOptions:addTitle("Alert Display")
+    modOptions:addTickBox(
+        "ImmersiveMode",
+        "Use immersive audio-only alerts",
+        false,
+        "Hides this mod's alert cards and display previews. Threat detection and configured alarm sounds continue unchanged."
+    )
     modOptions:addTickBox("ShowDirectionArrow", "Show a direction arrow beside the warning", true)
     modOptions:addTickBox(
         "MinimalAlertUI",
@@ -1335,14 +1342,14 @@ local function drawCompactAlertGroup(alertWarnings, zombieWarning, sprinterWarni
         if compact then
             lineBounds, nextY = drawMinimalAlertLine(
                 text, screenWidth, centerX, y, sprinterWarning.count, sprinterWarning.distance,
-                { 1, 0.28, 0.08 }, "zombie", sprinterWarning.directionAngle,
+                SPRINTER_COLOUR, "zombie", sprinterWarning.directionAngle,
                 true, nil, "sprinter"
             )
         else
             local message = "SPRINTERS NEARBY (" .. tostring(sprinterWarning.count) .. ") - "
                 .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
             lineBounds, nextY = drawCompactAlertLine(
-                text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 }, "zombie",
+                text, screenWidth, centerX, y, message, SPRINTER_COLOUR, "zombie",
                 sprinterWarning.directionAngle, true, "sprinter"
             )
         end
@@ -1416,7 +1423,7 @@ local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
             headerTexture, bodyTexture, text, screenWidth, centerX, y,
             title, detail,
             nil, "hostile", sprinterWarning.directionAngle, true,
-            { 1, 0.28, 0.08 }, "zombie", compact, nil, "sprinter"
+            SPRINTER_COLOUR, "zombie", compact, nil, "sprinter"
         )
         bounds = mergeBounds(bounds, x, y, width, height)
     end
@@ -1437,6 +1444,10 @@ beginAlertPreview = function(kind)
 end
 
 local function drawAlertPreview()
+    if getOption("ImmersiveMode", false) then
+        activeAlertPreview = nil
+        return false
+    end
     if not activeAlertPreview then return false end
     if getTimestampMs() >= activeAlertPreview.expiresAt then
         activeAlertPreview = nil
@@ -2003,6 +2014,13 @@ local function updateWarning()
 end
 
 local function drawWarning()
+    if getOption("ImmersiveMode", false) then
+        displayedArrowAngles = {}
+        activeAlertPreview = nil
+        updateAlertDragHandle(nil, 0, 0)
+        updateAlertDragHandle(nil, 0, 0, "zombie")
+        return
+    end
     if alertPreviewIsActive() then
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
@@ -2148,7 +2166,7 @@ local function drawWarning()
                         title,
                         "Nearest sprinter: " .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles",
                         nil, "hostile", sprinterWarning.directionAngle, true,
-                        { 1, 0.28, 0.08 }, "zombie", false, nil, "sprinter"
+                        SPRINTER_COLOUR, "zombie", false, nil, "sprinter"
                     )
                     neatBounds = mergeBounds(neatBounds, x, y, width, height)
                 end
@@ -2266,7 +2284,7 @@ local function drawWarning()
                 .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
             local y = bounds and bounds.bottom + 4 or nextWarningY
             local lineBounds = drawCompactAlertLine(
-                text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 },
+                text, screenWidth, centerX, y, message, SPRINTER_COLOUR,
                 "zombie", sprinterWarning.directionAngle, true, "sprinter"
             )
             bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
