@@ -506,30 +506,47 @@ function AlertArrowLayer:new()
     return ISUIElement.new(self, 0, 0, 1, 1)
 end
 
-local alertArrowLayer
+local alertArrowLayers = { live = {}, preview = {} }
+local arrowLayerCounts = { live = 0, preview = 0 }
+local currentArrowLayerPass = "live"
 local displayedArrowAngles = {}
 
-local function ensureAlertArrowLayer(screenWidth, screenHeight)
-    if not alertArrowLayer then
+local function beginArrowLayerPass(pass)
+    currentArrowLayerPass = pass
+    arrowLayerCounts[pass] = 0
+end
+
+local function finishArrowLayerPass(pass)
+    local layers = alertArrowLayers[pass]
+    for index = arrowLayerCounts[pass] + 1, #layers do
+        local layer = layers[index]
+        layer:setVisible(false)
+        layer:setX(-10000)
+        layer:setY(-10000)
+        layer:setWidth(1)
+        layer:setHeight(1)
+    end
+end
+
+local function ensureAlertArrowLayer(pass, index)
+    local layers = alertArrowLayers[pass]
+    local layer = layers[index]
+    if not layer then
         local ok, layer = pcall(function()
             local instance = AlertArrowLayer:new()
             instance:initialise()
             instance:addToUIManager()
             instance:setWantMouseEvents(false)
-            instance:setAlwaysOnTop(true)
             instance:setVisible(true)
             return instance
         end)
-        if ok then alertArrowLayer = layer end
+        if ok then
+            layers[index] = layer
+        else
+            return nil
+        end
     end
-
-    if alertArrowLayer then
-        alertArrowLayer:setX(0)
-        alertArrowLayer:setY(0)
-        alertArrowLayer:setWidth(screenWidth or 1)
-        alertArrowLayer:setHeight(screenHeight or 1)
-    end
-    return alertArrowLayer
+    return layers[index]
 end
 
 local function smoothArrowAngle(key, targetAngle)
@@ -554,23 +571,36 @@ end
 
 local function drawDirectionArrow(centerX, centerY, angle, colour, size, key)
     if angle == nil then return end
-    local core = getCore()
-    local layer = ensureAlertArrowLayer(core:getScreenWidth(), core:getScreenHeight())
-    if not layer then return end
-
     angle = smoothArrowAngle(key, angle)
     local directionX = math.sin(angle)
     local directionY = -math.cos(angle)
     local perpendicularX = math.cos(angle)
     local perpendicularY = math.sin(angle)
+    local outerTriangleSize = size + 2
+    local radius = math.ceil(outerTriangleSize * 0.53 + 2)
+    local layerX = math.floor(centerX - radius)
+    local layerY = math.floor(centerY - radius)
+
+    local layerIndex = arrowLayerCounts[currentArrowLayerPass] + 1
+    local layer = ensureAlertArrowLayer(currentArrowLayerPass, layerIndex)
+    if not layer then return end
+    arrowLayerCounts[currentArrowLayerPass] = layerIndex
+
+    layer:setX(layerX)
+    layer:setY(layerY)
+    layer:setWidth(radius * 2 + 1)
+    layer:setHeight(radius * 2 + 1)
+    layer:setVisible(true)
+    local localCenterX = centerX - layerX
+    local localCenterY = centerY - layerY
 
     local function drawTriangle(triangleSize, r, g, b, alpha)
         local halfLength = triangleSize * 0.5
         local halfWidth = triangleSize * 0.32
-        local tipX = centerX + directionX * halfLength
-        local tipY = centerY + directionY * halfLength
-        local baseX = centerX - directionX * halfLength
-        local baseY = centerY - directionY * halfLength
+        local tipX = localCenterX + directionX * halfLength
+        local tipY = localCenterY + directionY * halfLength
+        local baseX = localCenterX - directionX * halfLength
+        local baseY = localCenterY - directionY * halfLength
         local leftX = baseX - perpendicularX * halfWidth
         local leftY = baseY - perpendicularY * halfWidth
         local rightX = baseX + perpendicularX * halfWidth
@@ -707,8 +737,6 @@ if Events and Events.OnGameStart then
     Events.OnGameStart.Add(function()
         ensureAlertDragHandle("alife")
         ensureAlertDragHandle("zombie")
-        local core = getCore()
-        ensureAlertArrowLayer(core:getScreenWidth(), core:getScreenHeight())
     end)
 end
 
@@ -839,10 +867,18 @@ local function sprinterAlarmDistance()
 end
 
 local function isSprinter(zombie)
-    local ok, speedType = pcall(function() return zombie:getSpeedType() end)
-    if not ok then return false end
+    local speedOk, speedType = pcall(function() return zombie:getSpeedType() end)
+    if not speedOk then return false end
     local constantOk, sprinterType = pcall(function() return IsoZombie.SPEED_SPRINTER end)
-    return constantOk and sprinterType ~= nil and speedType == sprinterType
+    if not constantOk or sprinterType == nil then return false end
+    local speedNumberOk, numericSpeedType = pcall(function()
+        return tonumber(tostring(speedType))
+    end)
+    local constantNumberOk, numericSprinterType = pcall(function()
+        return tonumber(tostring(sprinterType))
+    end)
+    return speedNumberOk and constantNumberOk and numericSpeedType ~= nil
+        and numericSprinterType ~= nil and numericSpeedType == numericSprinterType
 end
 
 local function zombieAlertId(zombie)
@@ -885,6 +921,41 @@ local function warningTitle(warning, uppercase)
     local title = (STANCE_LABELS[warning.stance] or "Hostile")
         .. " A-Life " .. (warning.count == 1 and "NPC nearby" or "NPCs nearby (" .. warning.count .. ")")
     return uppercase and string.upper(title) or title
+end
+
+local function factionNameFor(project, record)
+    local factionId = record.factionId
+    if factionId == nil then return nil end
+
+    local catalog = project.Catalog
+    if type(catalog) == "table" and type(catalog.faction) == "function" then
+        local ok, faction = pcall(catalog.faction, factionId)
+        local general = ok and type(faction) == "table" and faction.general or nil
+        local name = type(general) == "table" and general.name or nil
+        if type(name) == "string" and name:match("%S") then
+            return tostring(factionId), name
+        end
+    end
+
+    local id = tostring(factionId)
+    return id, (id:gsub("_", " "))
+end
+
+local function warningFactionDetail(warning)
+    local names = warning.factionNames
+    if type(names) ~= "table" or #names == 0 then return nil end
+
+    local displayed = {}
+    local shownCount = math.min(#names, 2)
+    for index = 1, shownCount do
+        displayed[#displayed + 1] = names[index]
+    end
+    if #names > shownCount then
+        displayed[#displayed + 1] = "+" .. tostring(#names - shownCount)
+    end
+
+    local label = #names == 1 and "Faction: " or "Factions: "
+    return label .. table.concat(displayed, ", ")
 end
 
 local function playerKey(player)
@@ -1310,6 +1381,16 @@ local function drawCompactAlertGroup(alertWarnings, zombieWarning, sprinterWarni
                 text, screenWidth, centerX, y, message, STANCE_COLOURS[warning.stance],
                 "alife", warning.directionAngle, warning.showArrow, "alife:" .. warning.stance
             )
+            local factionDetail = warningFactionDetail(warning)
+            if factionDetail then
+                local factionBounds
+                factionBounds, nextY = drawCompactAlertLine(
+                    text, screenWidth, centerX, nextY, factionDetail,
+                    STANCE_COLOURS[warning.stance], nil, nil, false, nil
+                )
+                bounds = mergeBounds(bounds, factionBounds.x, factionBounds.y,
+                    factionBounds.right - factionBounds.x, factionBounds.bottom - factionBounds.y)
+            end
         end
         bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
             lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
@@ -1370,17 +1451,21 @@ local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
         local extraDetail
         local title = warningTitle(warning, false)
         local detail = "Distance: " .. tostring(math.floor(warning.distance + 0.5)) .. " tiles"
-        local standardExtraDetail
+        local standardExtraDetails = {}
+        local factionDetail = warningFactionDetail(warning)
+        if factionDetail then
+            standardExtraDetails[#standardExtraDetails + 1] = factionDetail
+        end
         if warning.firearmCarriers and warning.firearmCarriers > 0 then
-            standardExtraDetail = tostring(warning.firearmCarriers)
+            standardExtraDetails[#standardExtraDetails + 1] = tostring(warning.firearmCarriers)
                 .. (warning.firearmCarriers == 1 and " firearm carrier nearby"
                     or " firearm carriers nearby")
         end
         if compact then
             title = tostring(warning.count)
             detail = tostring(math.floor(warning.distance + 0.5)) .. "t"
-        elseif warning.firearmCarriers and warning.firearmCarriers > 0 then
-            extraDetail = standardExtraDetail
+        elseif #standardExtraDetails > 0 then
+            extraDetail = table.concat(standardExtraDetails, " | ")
         end
         local nextY, x, width, height = drawNeatAlertCard(
             headerTexture, bodyTexture, text, screenWidth, centerX, y,
@@ -1444,13 +1529,19 @@ beginAlertPreview = function(kind)
 end
 
 local function drawAlertPreview()
+    beginArrowLayerPass("preview")
     if getOption("ImmersiveMode", false) then
         activeAlertPreview = nil
+        finishArrowLayerPass("preview")
         return false
     end
-    if not activeAlertPreview then return false end
+    if not activeAlertPreview then
+        finishArrowLayerPass("preview")
+        return false
+    end
     if getTimestampMs() >= activeAlertPreview.expiresAt then
         activeAlertPreview = nil
+        finishArrowLayerPass("preview")
         return false
     end
 
@@ -1475,6 +1566,7 @@ local function drawAlertPreview()
                     distance = 6,
                     directionAngle = math.rad(28),
                     firearmCarriers = 1,
+                    factionNames = { "Bandits", "Cordon Patrol" },
                     showArrow = true,
                 },
                 {
@@ -1483,6 +1575,7 @@ local function drawAlertPreview()
                     distance = 18,
                     directionAngle = math.rad(-72),
                     firearmCarriers = 0,
+                    factionNames = { "Riverside Survivors" },
                     showArrow = true,
                 },
                 {
@@ -1491,6 +1584,7 @@ local function drawAlertPreview()
                     distance = 34,
                     directionAngle = math.rad(142),
                     firearmCarriers = 0,
+                    factionNames = { "Muldraugh Militia" },
                     showArrow = true,
                 },
             }
@@ -1517,6 +1611,7 @@ local function drawAlertPreview()
     end)
     displayedArrowAngles = liveArrowAngles
     if not ok then activeAlertPreview = nil end
+    finishArrowLayerPass("preview")
     return ok
 end
 
@@ -1674,6 +1769,8 @@ local function scanNearbyThreats()
             nearestDistance = rangeSquared,
             firearmCarriers = 0,
             nearestFirearmDistance = rangeSquared,
+            factions = {},
+            factionNames = {},
         }
     end
     local rearZombies = 0
@@ -1775,6 +1872,11 @@ local function scanNearbyThreats()
                             local threat = threatsByStance[stance]
                             if threat then
                                 threat.count = threat.count + 1
+                                local factionId, factionName = factionNameFor(project, record)
+                                if factionId and not threat.factions[factionId] then
+                                    threat.factions[factionId] = true
+                                    threat.factionNames[#threat.factionNames + 1] = factionName
+                                end
                                 if threat.nearestDirectionAngle == nil or distanceSquared < threat.nearestDistance then
                                     threat.nearestDistance = distanceSquared
                                     threat.nearestDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
@@ -1806,6 +1908,7 @@ local function scanNearbyThreats()
                     and threat.nearestFirearmDistance or threat.nearestDistance),
                 directionAngle = threat.nearestFirearmDirectionAngle or threat.nearestDirectionAngle,
                 firearmCarriers = threat.firearmCarriers,
+                factionNames = threat.factionNames,
                 showArrow = showDirectionArrow,
             }
         end
@@ -2014,16 +2117,19 @@ local function updateWarning()
 end
 
 local function drawWarning()
+    beginArrowLayerPass("live")
     if getOption("ImmersiveMode", false) then
         displayedArrowAngles = {}
         activeAlertPreview = nil
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
+        finishArrowLayerPass("live")
         return
     end
     if alertPreviewIsActive() then
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
+        finishArrowLayerPass("live")
         return
     end
     if disableAlertsInVehicle and playerInVehicle then
@@ -2038,12 +2144,14 @@ local function drawWarning()
         lastSprinterAlarmZombieIDs = {}
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
+        finishArrowLayerPass("live")
         return
     end
     if #warnings == 0 and rearZombieWarning == nil and sprinterWarning == nil then
         displayedArrowAngles = {}
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
+        finishArrowLayerPass("live")
         return
     end
 
@@ -2108,6 +2216,7 @@ local function drawWarning()
                 errorLogged = true
             end
         end
+        finishArrowLayerPass("live")
         return
     end
 
@@ -2127,9 +2236,13 @@ local function drawWarning()
             local okNeat = pcall(function()
                 local y = startY
                 for _, currentWarning in ipairs(warnings) do
-                    local extraDetail
+                    local extraDetails = {}
+                    local factionDetail = warningFactionDetail(currentWarning)
+                    if factionDetail then
+                        extraDetails[#extraDetails + 1] = factionDetail
+                    end
                     if currentWarning.firearmCarriers and currentWarning.firearmCarriers > 0 then
-                        extraDetail = tostring(currentWarning.firearmCarriers)
+                        extraDetails[#extraDetails + 1] = tostring(currentWarning.firearmCarriers)
                             .. (currentWarning.firearmCarriers == 1 and " firearm carrier nearby"
                                 or " firearm carriers nearby")
                     end
@@ -2138,7 +2251,8 @@ local function drawWarning()
                         headerTexture, bodyTexture, text, screenWidth, centerX, y,
                         warningTitle(currentWarning, false),
                         "Distance: " .. tostring(math.floor(currentWarning.distance + 0.5)) .. " tiles",
-                        extraDetail, currentWarning.stance, currentWarning.directionAngle,
+                        #extraDetails > 0 and table.concat(extraDetails, " | ") or nil,
+                        currentWarning.stance, currentWarning.directionAngle,
                         currentWarning.showArrow, STANCE_COLOURS[currentWarning.stance], "alife",
                         false, currentWarning.firearmCarriers,
                         "alife:" .. currentWarning.stance
@@ -2239,6 +2353,11 @@ local function drawWarning()
                 drawCenteredMessage(UIFont.Small, firearmMessage, nextWarningY, colour)
                 nextWarningY = nextWarningY + text:getFontHeight(UIFont.Small) + 4
             end
+            local factionDetail = warningFactionDetail(currentWarning)
+            if factionDetail then
+                drawCenteredMessage(UIFont.Small, factionDetail, nextWarningY, colour)
+                nextWarningY = nextWarningY + text:getFontHeight(UIFont.Small) + 4
+            end
         end
 
         if rearZombieWarning then
@@ -2297,6 +2416,7 @@ local function drawWarning()
         print("[Viewpoint Threat Detector] Warning display failed: " .. tostring(err))
         errorLogged = true
     end
+    finishArrowLayerPass("live")
 end
 
 local ticks = 0
