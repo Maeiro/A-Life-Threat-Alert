@@ -51,22 +51,18 @@ local STANCE_LABELS = {
     hostile = "Hostile",
 }
 local STANCE_COLOURS = {
-    allied = { 0.35, 0.72, 1 },
-    friendly = { 0.35, 0.9, 0.35 },
+    allied = { 0.25, 0.68, 1 },
+    friendly = { 0.25, 0.9, 0.35 },
     neutral = { 0.88, 0.88, 0.88 },
-    careful = { 1, 0.62, 0.16 },
+    careful = { 1, 0.82, 0.12 },
     hostile = { 1, 0.2, 0.16 },
 }
 local SHADOW_OFFSETS = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} }
-local DIRECTION_LABELS = {
-    "AHEAD", "AHEAD-RIGHT", "RIGHT", "BEHIND-RIGHT",
-    "BEHIND", "BEHIND-LEFT", "LEFT", "AHEAD-LEFT",
-}
-local directionTextureCache = {}
 local typeIconTextureCache = {}
 local neatPanelTextureCache = {}
 local TYPE_ICON_TEXTURES = {
     alife = "media/ui/ThreatAlert/alife.png",
+    firearm = "media/textures/Item_HandGun3",
     zombie = "media/ui/Moodles/32/Mood_Zombified.png",
 }
 local NEAT_PANEL_HEADER_TEXTURE = "media/ui/NeatUI/DefaultPanel/MainTitle_BG.png"
@@ -193,7 +189,7 @@ if PZAPI and PZAPI.ModOptions then
         "MinimalAlertUI",
         "Use minimal alert UI",
         false,
-        "Uses compact text and icons without the NeatUI alert cards."
+        "Shows icons, counts, colored direction arrows, and tile distances without labels."
     )
     modOptions:addTickBox(
         "SeparateAlertPositions",
@@ -358,6 +354,89 @@ function AlertDragHandle:new()
     return ISUIElement.new(self, 0, 0, 1, 1)
 end
 
+local AlertArrowLayer = ISUIElement:derive("ViewpointThreatDetectorAlertArrowLayer")
+
+function AlertArrowLayer:new()
+    return ISUIElement.new(self, 0, 0, 1, 1)
+end
+
+local alertArrowLayer
+local displayedArrowAngles = {}
+
+local function ensureAlertArrowLayer(screenWidth, screenHeight)
+    if not alertArrowLayer then
+        local ok, layer = pcall(function()
+            local instance = AlertArrowLayer:new()
+            instance:initialise()
+            instance:addToUIManager()
+            instance:setWantMouseEvents(false)
+            instance:setAlwaysOnTop(true)
+            instance:setVisible(true)
+            return instance
+        end)
+        if ok then alertArrowLayer = layer end
+    end
+
+    if alertArrowLayer then
+        alertArrowLayer:setX(0)
+        alertArrowLayer:setY(0)
+        alertArrowLayer:setWidth(screenWidth or 1)
+        alertArrowLayer:setHeight(screenHeight or 1)
+    end
+    return alertArrowLayer
+end
+
+local function smoothArrowAngle(key, targetAngle)
+    if not key or targetAngle == nil then return targetAngle end
+    local previousAngle = displayedArrowAngles[key]
+    if previousAngle == nil then
+        displayedArrowAngles[key] = targetAngle
+        return targetAngle
+    end
+
+    local difference = targetAngle - previousAngle
+    if difference > math.pi then
+        difference = difference - math.pi * 2
+    elseif difference < -math.pi then
+        difference = difference + math.pi * 2
+    end
+    local angle = previousAngle + difference * 0.35
+    if math.abs(difference) < 0.002 then angle = targetAngle end
+    displayedArrowAngles[key] = angle
+    return angle
+end
+
+local function drawDirectionArrow(centerX, centerY, angle, colour, size, key)
+    if angle == nil then return end
+    local core = getCore()
+    local layer = ensureAlertArrowLayer(core:getScreenWidth(), core:getScreenHeight())
+    if not layer then return end
+
+    angle = smoothArrowAngle(key, angle)
+    local directionX = math.sin(angle)
+    local directionY = -math.cos(angle)
+    local perpendicularX = math.cos(angle)
+    local perpendicularY = math.sin(angle)
+
+    local function drawTriangle(triangleSize, r, g, b, alpha)
+        local halfLength = triangleSize * 0.5
+        local halfWidth = triangleSize * 0.32
+        local tipX = centerX + directionX * halfLength
+        local tipY = centerY + directionY * halfLength
+        local baseX = centerX - directionX * halfLength
+        local baseY = centerY - directionY * halfLength
+        local leftX = baseX - perpendicularX * halfWidth
+        local leftY = baseY - perpendicularY * halfWidth
+        local rightX = baseX + perpendicularX * halfWidth
+        local rightY = baseY + perpendicularY * halfWidth
+        layer:drawPolygon(nil, tipX, tipY, leftX, leftY,
+            rightX, rightY, rightX, rightY, r, g, b, alpha)
+    end
+
+    drawTriangle(size + 2, 0.02, 0.02, 0.02, 0.9)
+    drawTriangle(size, colour[1], colour[2], colour[3], 1)
+end
+
 local function moveAlertDragHandle(handle, dx, dy, source)
     if not handle.dragging then return end
     local core = getCore()
@@ -482,6 +561,8 @@ if Events and Events.OnGameStart then
     Events.OnGameStart.Add(function()
         ensureAlertDragHandle("alife")
         ensureAlertDragHandle("zombie")
+        local core = getCore()
+        ensureAlertArrowLayer(core:getScreenWidth(), core:getScreenHeight())
     end)
 end
 
@@ -782,35 +863,10 @@ local lastCloseHostileNPCs = {}
 local lastSprinterZombieIDs = {}
 local errorLogged = false
 
-local function directionSector(dx, dy, forwardX, forwardY)
+local function directionAngle(dx, dy, forwardX, forwardY)
     local forward = dx * forwardX + dy * forwardY
     local right = dx * -forwardY + dy * forwardX
-    local absForward, absRight = math.abs(forward), math.abs(right)
-    local diagonalThreshold = 0.41421356
-
-    if absRight <= absForward * diagonalThreshold then
-        return forward >= 0 and 1 or 5
-    end
-    if absForward <= absRight * diagonalThreshold then
-        return right >= 0 and 3 or 7
-    end
-    if forward >= 0 then return right >= 0 and 2 or 8 end
-    return right >= 0 and 4 or 6
-end
-
-local function directionTextureFor(stance, sector)
-    if not sector or not UIManager or not UIManager.DrawTexture then return nil end
-    local arrowStance = stance == "hostile" and "hostile" or "careful"
-    local texturePath = "media/ui/ThreatAlert/" .. arrowStance .. "_" .. tostring(sector) .. ".png"
-    local texture = directionTextureCache[texturePath]
-    if not texture and type(getTexture) == "function" then
-        local ok, loaded = pcall(getTexture, texturePath)
-        if ok and loaded then
-            texture = loaded
-            directionTextureCache[texturePath] = loaded
-        end
-    end
-    return texture
+    return math.atan2(right, forward)
 end
 
 local function typeIconTexture(kind)
@@ -841,54 +897,133 @@ local function neatPanelTexture(path)
 end
 
 local function drawNeatAlertCard(headerTexture, bodyTexture, text, screenWidth, centerX, y,
-        title, detail, extraDetail, stance, sector, showArrow, colour, iconKind)
-    local arrow = showArrow and directionTextureFor(stance, sector) or nil
+        title, detail, extraDetail, stance, directionAngleValue, showArrow, colour, iconKind,
+        compact, firearmCarriers, arrowKey)
     local typeIcon = typeIconTexture(iconKind)
-    if not arrow and sector then
-        detail = detail .. " - " .. (DIRECTION_LABELS[sector] or DIRECTION_LABELS[1])
-    end
-
+    local hasArrow = showArrow and directionAngleValue ~= nil
+    local firearmIcon = compact and firearmCarriers and firearmCarriers > 0
+        and typeIconTexture("firearm") or nil
+    local firearmCount = firearmIcon and tostring(firearmCarriers) or nil
+    local firearmCountWidth = firearmCount and text:MeasureStringX(UIFont.Small, firearmCount) or 0
+    local firearmSize = firearmIcon and 16 or 0
     local padding = 10
+    local titleFont = UIFont.Medium
     local smallHeight = text:getFontHeight(UIFont.Small)
-    local mediumHeight = text:getFontHeight(UIFont.Medium)
-    local titleWidth = text:MeasureStringX(UIFont.Medium, title)
+    local titleHeight = text:getFontHeight(titleFont)
+    local titleWidth = text:MeasureStringX(titleFont, title)
     local detailWidth = text:MeasureStringX(UIFont.Small, detail)
     local extraDetailWidth = extraDetail and text:MeasureStringX(UIFont.Small, extraDetail) or 0
-    local arrowSpace = arrow and 28 or 0
+    local arrowSize = 20
+    local arrowSpace = hasArrow and arrowSize + 8 or 0
     local iconSize = typeIcon and (iconKind == "zombie" and 24 or 20) or 0
     local iconGap = typeIcon and 8 or 0
     local titleSpace = iconSize + iconGap
-    local contentWidth = math.max(titleWidth + titleSpace, detailWidth, extraDetailWidth)
+    local firearmRowWidth = firearmIcon and firearmSize + 3 + firearmCountWidth or 0
+    local contentWidth = math.max(titleWidth + titleSpace, detailWidth,
+        extraDetailWidth, firearmRowWidth)
     local width = math.min(contentWidth + padding * 2 + arrowSpace, screenWidth - 24)
-    local headerHeight = mediumHeight + 12
-    local bodyHeight = padding + smallHeight + (extraDetail and smallHeight + 4 or 0) + 2
+    local headerHeight = titleHeight + 12
+    local lineGap = 4
+    local hasExtraLine = extraDetail ~= nil or firearmIcon ~= nil
+    local bodyHeight = padding + smallHeight
+        + (hasExtraLine and smallHeight + lineGap or 0) + 2
     local x = math.floor(math.max(12, math.min(screenWidth - width - 12, centerX - width * 0.5)))
 
     headerTexture:render(x, y, width, headerHeight, 0.08, 0.08, 0.08, 1)
     bodyTexture:render(x, y + headerHeight, width, bodyHeight, 0.15, 0.15, 0.15, 1)
 
-    local titleY = y + math.floor((headerHeight - mediumHeight) * 0.5)
-    text:DrawStringCentre(UIFont.Medium, x + padding + titleSpace + titleWidth * 0.5,
+    local titleY = y + math.floor((headerHeight - titleHeight) * 0.5)
+    local titleCenterX = x + padding + titleSpace + titleWidth * 0.5
+    if compact then
+        local titleStartX = x + padding + titleSpace
+        local titleEndX = x + width - padding - arrowSpace
+        titleCenterX = (titleStartX + titleEndX) * 0.5
+    end
+    text:DrawStringCentre(titleFont, titleCenterX,
         titleY, title, colour[1], colour[2], colour[3], 1)
     if typeIcon then
         UIManager.DrawTexture(typeIcon, x + padding,
             y + math.floor((headerHeight - iconSize) * 0.5), iconSize, iconSize, 1)
     end
-    if arrow then
-        UIManager.DrawTexture(arrow, x + width - padding - 20,
-            y + math.floor((headerHeight - 20) * 0.5), 20, 20, 1)
+    if hasArrow then
+        drawDirectionArrow(x + width - padding - arrowSize * 0.5,
+            y + headerHeight * 0.5, directionAngleValue, colour, arrowSize, arrowKey)
     end
 
     local detailY = y + headerHeight + math.floor(padding * 0.5)
-    text:DrawStringCentre(UIFont.Small, x + padding + detailWidth * 0.5,
+    local detailCenterX = compact and x + width * 0.5
+        or x + padding + detailWidth * 0.5
+    text:DrawStringCentre(UIFont.Small, detailCenterX,
         detailY, detail, 0.9, 0.9, 0.9, 1)
+    if firearmIcon then
+        local firearmY = detailY + smallHeight + lineGap
+        local firearmStartX = x + (width - firearmRowWidth) * 0.5
+        UIManager.DrawTexture(firearmIcon, firearmStartX, firearmY - 1, firearmSize, firearmSize, 1)
+        text:DrawStringCentre(UIFont.Small,
+            firearmStartX + firearmSize + 3 + firearmCountWidth * 0.5,
+            firearmY, firearmCount, 0.9, 0.9, 0.9, 1)
+    end
     if extraDetail then
-        local extraY = detailY + smallHeight + 4
-        text:DrawStringCentre(UIFont.Small, x + padding + extraDetailWidth * 0.5,
+        local extraY = detailY + smallHeight + lineGap
+        local extraDetailCenterX = compact and x + width * 0.5
+            or x + padding + extraDetailWidth * 0.5
+        text:DrawStringCentre(UIFont.Small, extraDetailCenterX,
             extraY, extraDetail, colour[1], colour[2], colour[3], 1)
     end
 
-    return y + headerHeight + bodyHeight + 6, x, width, headerHeight + bodyHeight
+    return y + headerHeight + bodyHeight + 6,
+        x, width, headerHeight + bodyHeight
+end
+
+local function drawMinimalAlertLine(text, screenWidth, centerX, y, count, distance,
+        colour, iconKind, directionAngleValue, showArrow, firearmCarriers, arrowKey)
+    local icon = typeIconTexture(iconKind)
+    local firearmIcon = firearmCarriers and firearmCarriers > 0
+        and typeIconTexture("firearm") or nil
+    local font = UIFont.Large
+    local lineHeight = text:getFontHeight(font)
+    local iconSize = icon and (iconKind == "zombie" and 24 or 20) or 0
+    local firearmSize = firearmIcon and 20 or 0
+    local countText = tostring(count)
+    local distanceText = tostring(math.floor(distance + 0.5)) .. "t"
+    local firearmText = firearmIcon and tostring(firearmCarriers) or nil
+    local countWidth = text:MeasureStringX(font, countText)
+    local distanceWidth = text:MeasureStringX(font, distanceText)
+    local firearmWidth = firearmText and text:MeasureStringX(font, firearmText) or 0
+    local hasArrow = showArrow and directionAngleValue ~= nil
+    local arrowSize = 20
+    local gap = 8
+    local width = iconSize + (iconSize > 0 and 4 or 0) + countWidth + gap + distanceWidth
+        + (firearmIcon and gap + firearmSize + 3 + firearmWidth or 0)
+        + (hasArrow and gap + arrowSize or 0)
+    local x = math.floor(math.max(8, math.min(screenWidth - width - 8, centerX - width * 0.5)))
+    local cursorX = x
+
+    if icon then
+        UIManager.DrawTexture(icon, cursorX, y + math.floor((lineHeight - iconSize) * 0.5), iconSize, iconSize, 1)
+        cursorX = cursorX + iconSize + 4
+    end
+    text:DrawStringCentre(font, cursorX + countWidth * 0.5,
+        y, countText, colour[1], colour[2], colour[3], 1)
+    cursorX = cursorX + countWidth + gap
+    text:DrawStringCentre(font, cursorX + distanceWidth * 0.5,
+        y, distanceText, 0.9, 0.9, 0.9, 1)
+    cursorX = cursorX + distanceWidth
+    if firearmIcon then
+        cursorX = cursorX + gap
+        UIManager.DrawTexture(firearmIcon, cursorX,
+            y + math.floor((lineHeight - firearmSize) * 0.5), firearmSize, firearmSize, 1)
+        cursorX = cursorX + firearmSize + 3
+        text:DrawStringCentre(font, cursorX + firearmWidth * 0.5,
+            y, firearmText, 0.9, 0.9, 0.9, 1)
+        cursorX = cursorX + firearmWidth
+    end
+    if hasArrow then
+        drawDirectionArrow(cursorX + gap + arrowSize * 0.5,
+            y + lineHeight * 0.5, directionAngleValue, colour, arrowSize, arrowKey)
+    end
+
+    return { x = x, y = y, right = x + width, bottom = y + lineHeight }, y + lineHeight + 3
 end
 
 local function mergeBounds(bounds, x, y, width, height)
@@ -967,19 +1102,18 @@ local function alertAnchor(kind, screenWidth, screenHeight, defaultY)
 end
 
 local function drawCompactAlertLine(text, screenWidth, centerX, y, message, colour,
-        iconKind, stance, sector, showArrow)
+        iconKind, directionAngleValue, showArrow, arrowKey)
     local icon = typeIconTexture(iconKind)
-    local arrow = showArrow and directionTextureFor(stance, sector) or nil
-    if not arrow and sector then
-        message = message .. " - " .. (DIRECTION_LABELS[sector] or DIRECTION_LABELS[1])
-    end
+    local hasArrow = showArrow and directionAngleValue ~= nil
 
     local font = UIFont.Small
     local lineHeight = text:getFontHeight(font)
     local iconSize = icon and 16 or 0
     local iconGap = icon and 5 or 0
-    local arrowSize = arrow and 16 or 0
-    local arrowGap = arrow and 5 or 0
+    local arrowSize = hasArrow and 20 or 0
+    local arrowGap = hasArrow and 8 or 0
+    local contentHeight = math.max(lineHeight, arrowSize)
+    local textY = y + math.floor((contentHeight - lineHeight) * 0.5)
     local messageWidth = text:MeasureStringX(font, message)
     local width = iconSize + iconGap + messageWidth + arrowGap + arrowSize
     local x = math.floor(math.max(8, math.min(screenWidth - width - 8, centerX - width * 0.5)))
@@ -987,59 +1121,86 @@ local function drawCompactAlertLine(text, screenWidth, centerX, y, message, colo
     local textCenter = textLeft + messageWidth * 0.5
 
     if icon then
-        UIManager.DrawTexture(icon, x, y + math.floor((lineHeight - iconSize) * 0.5), iconSize, iconSize, 1)
+        UIManager.DrawTexture(icon, x, y + math.floor((contentHeight - iconSize) * 0.5), iconSize, iconSize, 1)
     end
     for _, offset in ipairs(SHADOW_OFFSETS) do
-        text:DrawStringCentre(font, textCenter + offset[1], y + offset[2], message, 0, 0, 0, 1)
+        text:DrawStringCentre(font, textCenter + offset[1], textY + offset[2], message, 0, 0, 0, 1)
     end
-    text:DrawStringCentre(font, textCenter, y, message, colour[1], colour[2], colour[3], 1)
-    if arrow then
-        UIManager.DrawTexture(arrow, textLeft + messageWidth + arrowGap,
-            y + math.floor((lineHeight - arrowSize) * 0.5), arrowSize, arrowSize, 1)
+    text:DrawStringCentre(font, textCenter, textY, message, colour[1], colour[2], colour[3], 1)
+    if hasArrow then
+        drawDirectionArrow(textLeft + messageWidth + arrowGap + arrowSize * 0.5,
+            y + contentHeight * 0.5, directionAngleValue, colour, arrowSize, arrowKey)
     end
 
-    return mergeBounds(nil, x, y, width, lineHeight), y + lineHeight + 3
+    return mergeBounds(nil, x, y, width, contentHeight), y + contentHeight + 3
 end
 
 local function drawCompactAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
-        text, screenWidth, centerX, startY)
+        text, screenWidth, centerX, startY, compact)
     local bounds
     local y = startY
     for _, warning in ipairs(alertWarnings) do
-        local message = string.upper(STANCE_LABELS[warning.stance] or "Hostile")
-            .. " A-LIFE (" .. tostring(warning.count) .. ") - "
-            .. tostring(math.floor(warning.distance + 0.5)) .. " TILES"
-        if warning.firearmCarriers and warning.firearmCarriers > 0 then
-            message = message .. " - " .. tostring(warning.firearmCarriers) .. " ARMED"
+        local lineBounds, nextY
+        if compact then
+            lineBounds, nextY = drawMinimalAlertLine(
+                text, screenWidth, centerX, y, warning.count, warning.distance,
+                STANCE_COLOURS[warning.stance], "alife", warning.directionAngle,
+                warning.showArrow, warning.firearmCarriers, "alife:" .. warning.stance
+            )
+        else
+            local message = string.upper(STANCE_LABELS[warning.stance] or "Hostile")
+                .. " A-LIFE (" .. tostring(warning.count) .. ") - "
+                .. tostring(math.floor(warning.distance + 0.5)) .. " TILES"
+            if warning.firearmCarriers and warning.firearmCarriers > 0 then
+                message = message .. " - " .. tostring(warning.firearmCarriers) .. " ARMED"
+            end
+            lineBounds, nextY = drawCompactAlertLine(
+                text, screenWidth, centerX, y, message, STANCE_COLOURS[warning.stance],
+                "alife", warning.directionAngle, warning.showArrow, "alife:" .. warning.stance
+            )
         end
-        local lineBounds, nextY = drawCompactAlertLine(
-            text, screenWidth, centerX, y, message, STANCE_COLOURS[warning.stance],
-            "alife", warning.stance, warning.direction, warning.showArrow
-        )
         bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
             lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
         y = nextY
     end
 
     if zombieWarning then
-        local message = "ZOMBIES OUT OF SIGHT (" .. tostring(zombieWarning.count) .. ") - "
-            .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " TILES"
-        local lineBounds, nextY = drawCompactAlertLine(
-            text, screenWidth, centerX, y, message, { 1, 0.2, 0.08 }, "zombie",
-            "hostile", zombieWarning.direction, true
-        )
+        local lineBounds, nextY
+        if compact then
+            lineBounds, nextY = drawMinimalAlertLine(
+                text, screenWidth, centerX, y, zombieWarning.count, zombieWarning.distance,
+                { 1, 0.2, 0.16 }, "zombie", zombieWarning.directionAngle,
+                true, nil, "rear-zombie"
+            )
+        else
+            local message = "ZOMBIES OUT OF SIGHT (" .. tostring(zombieWarning.count) .. ") - "
+                .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " TILES"
+            lineBounds, nextY = drawCompactAlertLine(
+                text, screenWidth, centerX, y, message, { 1, 0.2, 0.08 }, "zombie",
+                zombieWarning.directionAngle, true, "rear-zombie"
+            )
+        end
         bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
             lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
         y = nextY
     end
 
     if sprinterWarning then
-        local message = "SPRINTERS NEARBY (" .. tostring(sprinterWarning.count) .. ") - "
-            .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
-        local lineBounds, nextY = drawCompactAlertLine(
-            text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 }, "zombie",
-            "hostile", sprinterWarning.direction, true
-        )
+        local lineBounds, nextY
+        if compact then
+            lineBounds, nextY = drawMinimalAlertLine(
+                text, screenWidth, centerX, y, sprinterWarning.count, sprinterWarning.distance,
+                { 1, 0.28, 0.08 }, "zombie", sprinterWarning.directionAngle,
+                true, nil, "sprinter"
+            )
+        else
+            local message = "SPRINTERS NEARBY (" .. tostring(sprinterWarning.count) .. ") - "
+                .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " TILES"
+            lineBounds, nextY = drawCompactAlertLine(
+                text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 }, "zombie",
+                sprinterWarning.directionAngle, true, "sprinter"
+            )
+        end
         bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
             lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)
         y = nextY
@@ -1050,22 +1211,31 @@ end
 
 local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
         headerTexture, bodyTexture,
-        text, screenWidth, centerX, startY)
+        text, screenWidth, centerX, startY, compact)
     local bounds
     local y = startY
     for _, warning in ipairs(alertWarnings) do
         local extraDetail
+        local title = warningTitle(warning, false)
+        local detail = "Distance: " .. tostring(math.floor(warning.distance + 0.5)) .. " tiles"
+        local standardExtraDetail
         if warning.firearmCarriers and warning.firearmCarriers > 0 then
-            extraDetail = tostring(warning.firearmCarriers)
+            standardExtraDetail = tostring(warning.firearmCarriers)
                 .. (warning.firearmCarriers == 1 and " firearm carrier nearby"
                     or " firearm carriers nearby")
         end
+        if compact then
+            title = tostring(warning.count)
+            detail = tostring(math.floor(warning.distance + 0.5)) .. "t"
+        elseif warning.firearmCarriers and warning.firearmCarriers > 0 then
+            extraDetail = standardExtraDetail
+        end
         local nextY, x, width, height = drawNeatAlertCard(
             headerTexture, bodyTexture, text, screenWidth, centerX, y,
-            warningTitle(warning, false),
-            "Distance: " .. tostring(math.floor(warning.distance + 0.5)) .. " tiles",
-            extraDetail, warning.stance, warning.direction,
-            warning.showArrow, STANCE_COLOURS[warning.stance], "alife"
+            title, detail,
+            extraDetail, warning.stance, warning.directionAngle,
+            warning.showArrow, STANCE_COLOURS[warning.stance], "alife", compact,
+            warning.firearmCarriers, "alife:" .. warning.stance
         )
         bounds = mergeBounds(bounds, x, y, width, height)
         y = nextY
@@ -1073,12 +1243,17 @@ local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
 
     if zombieWarning then
         local title = "Zombies out of sight (" .. tostring(zombieWarning.count) .. ")"
+        local detail = "Nearest zombie: "
+            .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " tiles"
+        if compact then
+            title = tostring(zombieWarning.count)
+            detail = tostring(math.floor(zombieWarning.distance + 0.5)) .. "t"
+        end
         local nextY, x, width, height = drawNeatAlertCard(
             headerTexture, bodyTexture, text, screenWidth, centerX, y,
-            title,
-            "Nearest zombie: " .. tostring(math.floor(zombieWarning.distance + 0.5)) .. " tiles",
-            nil, "hostile", zombieWarning.direction, true,
-            { 1, 0.2, 0.16 }, "zombie"
+            title, detail,
+            nil, "hostile", zombieWarning.directionAngle, true,
+            { 1, 0.2, 0.16 }, "zombie", compact, nil, "rear-zombie"
         )
         bounds = mergeBounds(bounds, x, y, width, height)
         y = nextY
@@ -1086,12 +1261,17 @@ local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
 
     if sprinterWarning then
         local title = "Sprinters nearby (" .. tostring(sprinterWarning.count) .. ")"
+        local detail = "Nearest sprinter: "
+            .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles"
+        if compact then
+            title = tostring(sprinterWarning.count)
+            detail = tostring(math.floor(sprinterWarning.distance + 0.5)) .. "t"
+        end
         local _, x, width, height = drawNeatAlertCard(
             headerTexture, bodyTexture, text, screenWidth, centerX, y,
-            title,
-            "Nearest sprinter: " .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles",
-            nil, "hostile", sprinterWarning.direction, true,
-            { 1, 0.28, 0.08 }, "zombie"
+            title, detail,
+            nil, "hostile", sprinterWarning.directionAngle, true,
+            { 1, 0.28, 0.08 }, "zombie", compact, nil, "sprinter"
         )
         bounds = mergeBounds(bounds, x, y, width, height)
     end
@@ -1242,10 +1422,10 @@ local function scanNearbyThreats()
     end
     local rearZombies = 0
     local nearestRearZombie = rearRangeSquared
-    local nearestRearZombieDirection
+    local nearestRearZombieDirectionAngle
     local sprinters = 0
     local nearestSprinter = sprinterRangeSquared
-    local nearestSprinterDirection
+    local nearestSprinterDirectionAngle
     for index = 0, list:size() - 1 do
         local shell = list:get(index)
         if shell ~= nil and not shell:isDead() then
@@ -1303,7 +1483,7 @@ local function scanNearbyThreats()
                     rearZombies = rearZombies + 1
                     if rearZombies == 1 or distanceSquared < nearestRearZombie then
                         nearestRearZombie = distanceSquared
-                        nearestRearZombieDirection = directionSector(dx, dy, forwardX, forwardY)
+                        nearestRearZombieDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
                     end
                 end
 
@@ -1312,7 +1492,7 @@ local function scanNearbyThreats()
                     sprinterZombieIDs[zombieAlertId(shell)] = true
                     if sprinters == 1 or distanceSquared < nearestSprinter then
                         nearestSprinter = distanceSquared
-                        nearestSprinterDirection = directionSector(dx, dy, forwardX, forwardY)
+                        nearestSprinterDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
                     end
                 end
 
@@ -1327,16 +1507,16 @@ local function scanNearbyThreats()
                             local threat = threatsByStance[stance]
                             if threat then
                                 threat.count = threat.count + 1
-                                if threat.nearestDirection == nil or distanceSquared < threat.nearestDistance then
+                                if threat.nearestDirectionAngle == nil or distanceSquared < threat.nearestDistance then
                                     threat.nearestDistance = distanceSquared
-                                    threat.nearestDirection = directionSector(dx, dy, forwardX, forwardY)
+                                    threat.nearestDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
                                 end
                                 if showFirearmWarning and carriesFirearm(project, shell) then
                                     threat.firearmCarriers = threat.firearmCarriers + 1
-                                    if threat.nearestFirearmDirection == nil
+                                    if threat.nearestFirearmDirectionAngle == nil
                                             or distanceSquared < threat.nearestFirearmDistance then
                                         threat.nearestFirearmDistance = distanceSquared
-                                        threat.nearestFirearmDirection = directionSector(dx, dy, forwardX, forwardY)
+                                        threat.nearestFirearmDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
                                     end
                                 end
                             end
@@ -1350,13 +1530,13 @@ local function scanNearbyThreats()
     for _, stance in ipairs(STANCE_PRIORITY) do
         local threat = threatsByStance[stance]
         if threat.count > 0 then
-            local usingFirearmDistance = threat.nearestFirearmDirection ~= nil
+            local usingFirearmDistance = threat.nearestFirearmDirectionAngle ~= nil
             warnings[#warnings + 1] = {
                 stance = stance,
                 count = threat.count,
                 distance = math.sqrt(usingFirearmDistance
                     and threat.nearestFirearmDistance or threat.nearestDistance),
-                direction = threat.nearestFirearmDirection or threat.nearestDirection,
+                directionAngle = threat.nearestFirearmDirectionAngle or threat.nearestDirectionAngle,
                 firearmCarriers = threat.firearmCarriers,
                 showArrow = showDirectionArrow,
             }
@@ -1367,14 +1547,14 @@ local function scanNearbyThreats()
         rearZombieWarning = {
             count = rearZombies,
             distance = math.sqrt(nearestRearZombie),
-            direction = nearestRearZombieDirection,
+            directionAngle = nearestRearZombieDirectionAngle,
         }
     end
     if sprinters > 0 then
         sprinterWarning = {
             count = sprinters,
             distance = math.sqrt(nearestSprinter),
-            direction = nearestSprinterDirection,
+            directionAngle = nearestSprinterDirectionAngle,
         }
     end
 end
@@ -1491,6 +1671,7 @@ end
 
 local function drawWarning()
     if disableAlertsInVehicle and playerInVehicle then
+        displayedArrowAngles = {}
         warnings = {}
         rearZombieWarning = nil
         sprinterWarning = nil
@@ -1504,6 +1685,7 @@ local function drawWarning()
         return
     end
     if #warnings == 0 and rearZombieWarning == nil and sprinterWarning == nil then
+        displayedArrowAngles = {}
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
         return
@@ -1517,8 +1699,8 @@ local function drawWarning()
             local screenWidth = core:getScreenWidth()
             local screenHeight = core:getScreenHeight()
             local text = getTextManager()
-            local headerTexture = not minimalUI and neatPanelTexture(NEAT_PANEL_HEADER_TEXTURE) or nil
-            local bodyTexture = not minimalUI and neatPanelTexture(NEAT_PANEL_BODY_TEXTURE) or nil
+            local headerTexture = neatPanelTexture(NEAT_PANEL_HEADER_TEXTURE)
+            local bodyTexture = neatPanelTexture(NEAT_PANEL_BODY_TEXTURE)
             local useNeat = headerTexture ~= nil and bodyTexture ~= nil
 
             local function drawGroup(alertWarnings, zombieWarning, sprinterAlert, kind, defaultY)
@@ -1527,12 +1709,12 @@ local function drawWarning()
                 if useNeat then
                     bounds = drawNeatAlertGroup(
                         alertWarnings, zombieWarning, sprinterAlert, headerTexture, bodyTexture,
-                        text, screenWidth, centerX, startY
+                        text, screenWidth, centerX, startY, minimalUI
                     )
                 else
                     bounds = drawCompactAlertGroup(
                         alertWarnings, zombieWarning, sprinterAlert,
-                        text, screenWidth, centerX, startY
+                        text, screenWidth, centerX, startY, minimalUI
                     )
                 end
                 updateAlertDragHandle(bounds, screenWidth, screenHeight, kind)
@@ -1550,12 +1732,12 @@ local function drawWarning()
                     bounds = drawNeatAlertGroup(
                         warnings, rearZombieWarning, sprinterWarning,
                         headerTexture, bodyTexture,
-                        text, screenWidth, centerX, startY
+                        text, screenWidth, centerX, startY, minimalUI
                     )
                 else
                     bounds = drawCompactAlertGroup(
                         warnings, rearZombieWarning, sprinterWarning,
-                        text, screenWidth, centerX, startY
+                        text, screenWidth, centerX, startY, minimalUI
                     )
                 end
                 updateAlertDragHandle(bounds, screenWidth, screenHeight, "alife")
@@ -1600,8 +1782,10 @@ local function drawWarning()
                         headerTexture, bodyTexture, text, screenWidth, centerX, y,
                         warningTitle(currentWarning, false),
                         "Distance: " .. tostring(math.floor(currentWarning.distance + 0.5)) .. " tiles",
-                        extraDetail, currentWarning.stance, currentWarning.direction,
-                        currentWarning.showArrow, STANCE_COLOURS[currentWarning.stance], "alife"
+                        extraDetail, currentWarning.stance, currentWarning.directionAngle,
+                        currentWarning.showArrow, STANCE_COLOURS[currentWarning.stance], "alife",
+                        false, currentWarning.firearmCarriers,
+                        "alife:" .. currentWarning.stance
                     )
                     neatBounds = mergeBounds(neatBounds, x, cardY, width, height)
                     y = nextY
@@ -1613,8 +1797,8 @@ local function drawWarning()
                         headerTexture, bodyTexture, text, screenWidth, centerX, y,
                         title,
                         "Nearest zombie: " .. tostring(math.floor(rearZombieWarning.distance + 0.5)) .. " tiles",
-                        nil, "hostile", rearZombieWarning.direction, true,
-                        { 1, 0.2, 0.16 }, "zombie"
+                        nil, "hostile", rearZombieWarning.directionAngle, true,
+                        { 1, 0.2, 0.16 }, "zombie", false, nil, "rear-zombie"
                     )
                     neatBounds = mergeBounds(neatBounds, x, y, width, height)
                     y = y + height + 6
@@ -1625,8 +1809,8 @@ local function drawWarning()
                         headerTexture, bodyTexture, text, screenWidth, centerX, y,
                         title,
                         "Nearest sprinter: " .. tostring(math.floor(sprinterWarning.distance + 0.5)) .. " tiles",
-                        nil, "hostile", sprinterWarning.direction, true,
-                        { 1, 0.28, 0.08 }, "zombie"
+                        nil, "hostile", sprinterWarning.directionAngle, true,
+                        { 1, 0.28, 0.08 }, "zombie", false, nil, "sprinter"
                     )
                     neatBounds = mergeBounds(neatBounds, x, y, width, height)
                 end
@@ -1655,8 +1839,8 @@ local function drawWarning()
         for _, currentWarning in ipairs(warnings) do
             local message = warningTitle(currentWarning, true)
             local colour = STANCE_COLOURS[currentWarning.stance]
-            local sector = currentWarning.direction
-            local texture = currentWarning.showArrow and directionTextureFor(currentWarning.stance, sector) or nil
+            local directionAngleValue = currentWarning.directionAngle
+            local hasArrow = currentWarning.showArrow and directionAngleValue ~= nil
             local distanceText = tostring(math.floor(currentWarning.distance + 0.5)) .. " tiles"
             local arrowSize = 20
             local arrowGap = 8
@@ -1664,22 +1848,16 @@ local function drawWarning()
             local iconSize = icon and 20 or 0
             local iconGap = icon and 8 or 0
             local messageY = nextWarningY
-            local arrowY = messageY + 6
-            if not texture then
-                local directionLabel = DIRECTION_LABELS[sector] or DIRECTION_LABELS[1]
-                message = message .. "  " .. distanceText .. " - " .. directionLabel
-            else
-                message = message .. "  " .. distanceText
-            end
+            message = message .. "  " .. distanceText
             local messageWidth = text:MeasureStringX(UIFont.Large, message)
 
             local groupWidth = iconSize + iconGap + messageWidth
-                + (texture and arrowGap + arrowSize or 0)
+                + (hasArrow and arrowGap + arrowSize or 0)
             local groupLeft = math.max(12, math.min(screenWidth - groupWidth - 12, centerX - groupWidth * 0.5))
             local messageLeft = groupLeft + iconSize + iconGap
             local messageX = messageLeft + messageWidth * 0.5
             local lineHeight = text:getFontHeight(UIFont.Large)
-            local arrowHeight = texture and 6 + arrowSize or 0
+            local arrowHeight = hasArrow and arrowSize or 0
             bounds = mergeBounds(bounds, groupLeft, messageY, groupWidth, math.max(lineHeight, arrowHeight))
             if icon then
                 UIManager.DrawTexture(icon, groupLeft,
@@ -1691,9 +1869,10 @@ local function drawWarning()
             end
             text:DrawStringCentre(UIFont.Large, messageX, messageY, message, colour[1], colour[2], colour[3], 1)
 
-            if texture then
-                UIManager.DrawTexture(texture, messageLeft + messageWidth + arrowGap,
-                    arrowY, arrowSize, arrowSize, 1)
+            if hasArrow then
+                drawDirectionArrow(messageLeft + messageWidth + arrowGap + arrowSize * 0.5,
+                    messageY + lineHeight * 0.5, directionAngleValue, colour, arrowSize,
+                    "alife:" .. currentWarning.stance)
             end
 
             nextWarningY = messageY + lineHeight + 4
@@ -1711,26 +1890,22 @@ local function drawWarning()
                 .. tostring(math.floor(rearZombieWarning.distance + 0.5)) .. " TILES"
             local y = nextWarningY
             local colour = { 1, 0.2, 0.08 }
-            local sector = rearZombieWarning.direction
-            local texture = directionTextureFor("hostile", sector)
+            local directionAngleValue = rearZombieWarning.directionAngle
+            local hasArrow = directionAngleValue ~= nil
             local icon = typeIconTexture("zombie")
             local messageWidth = text:MeasureStringX(UIFont.Large, message)
-            if not texture then
-                message = message .. " - " .. (DIRECTION_LABELS[sector] or DIRECTION_LABELS[1])
-                messageWidth = text:MeasureStringX(UIFont.Large, message)
-            end
 
             local arrowSize = 20
             local arrowGap = 8
             local iconSize = icon and 24 or 0
             local iconGap = icon and 8 or 0
             local groupWidth = iconSize + iconGap + messageWidth
-                + (texture and arrowGap + arrowSize or 0)
+                + (hasArrow and arrowGap + arrowSize or 0)
             local groupLeft = math.max(12, math.min(screenWidth - groupWidth - 12, centerX - groupWidth * 0.5))
             local messageLeft = groupLeft + iconSize + iconGap
             local messageX = messageLeft + messageWidth * 0.5
             local lineHeight = text:getFontHeight(UIFont.Large)
-            local arrowHeight = texture and 6 + arrowSize or 0
+            local arrowHeight = hasArrow and arrowSize or 0
             bounds = mergeBounds(bounds, groupLeft, y, groupWidth, math.max(lineHeight, arrowHeight))
             if icon then
                 UIManager.DrawTexture(icon, groupLeft,
@@ -1741,9 +1916,10 @@ local function drawWarning()
                 text:DrawStringCentre(UIFont.Large, messageX + offset[1], y + offset[2], message, 0, 0, 0, 1)
             end
             text:DrawStringCentre(UIFont.Large, messageX, y, message, colour[1], colour[2], colour[3], 1)
-            if texture then
-                UIManager.DrawTexture(texture, messageLeft + messageWidth + arrowGap,
-                    y + 6, arrowSize, arrowSize, 1)
+            if hasArrow then
+                drawDirectionArrow(messageLeft + messageWidth + arrowGap + arrowSize * 0.5,
+                    y + lineHeight * 0.5, directionAngleValue, colour, arrowSize,
+                    "rear-zombie")
             end
         end
 
@@ -1753,7 +1929,7 @@ local function drawWarning()
             local y = bounds and bounds.bottom + 4 or nextWarningY
             local lineBounds = drawCompactAlertLine(
                 text, screenWidth, centerX, y, message, { 1, 0.28, 0.08 },
-                "zombie", "hostile", sprinterWarning.direction, true
+                "zombie", sprinterWarning.directionAngle, true, "sprinter"
             )
             bounds = mergeBounds(bounds, lineBounds.x, lineBounds.y,
                 lineBounds.right - lineBounds.x, lineBounds.bottom - lineBounds.y)

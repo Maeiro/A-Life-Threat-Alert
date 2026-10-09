@@ -14,7 +14,7 @@ Alerts are disabled while the player is inside a vehicle by default; this can be
 
 Alarm sounds are enabled by default, with the bundled heartbeat selected. Choose the radar ping, siren, heartbeat, or soft beep in Mod Options. Alarm volume is configurable from 0% to 200% and defaults to 150% to make warnings easier to hear. By default, sounds are limited to zombie warnings; A-Life notifications remain silent. Turn that restriction off to play sounds for all threat types. Sprinter alarms have separate sound and volume settings. A new alarm stops the previous one so alert sounds do not overlap. No other mod is required. An alarm plays when a new warning type appears, not on every scan. Sound asset licenses and credits are included in `42/SOUND_CREDITS.txt`.
 
-When NeatUI_Framework is active, alerts use its panel textures and styling. Without it, the alert falls back to the standard HUD text.
+When NeatUI_Framework is active, alerts use its panel textures and styling. Minimal Alert UI removes text labels and shows icons, counts, direction arrows, and tile distances (such as `68t`), keeping the normal text and icon scale while sizing each card to its contents. Arrows are drawn as triangles, rotate continuously toward each threat, and use the A-Life stance colors: red for Hostile, yellow for Careful, white for Neutral, green for Friendly, and blue for Allied. Nearby firearm carriers use the vanilla M9 Pistol icon. Without NeatUI_Framework, the same information appears in a compact HUD line.
 
 Small icons distinguish A-Life NPC alerts from zombie alerts.
 
