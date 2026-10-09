@@ -1092,6 +1092,21 @@ local function directionAngle(dx, dy, forwardX, forwardY)
     return math.atan2(right, forward)
 end
 
+local function cameraForwardDirection(fallbackX, fallbackY)
+    local compass = ViewpointCompass
+    if not compass or type(compass.getHeading) ~= "function" then
+        return fallbackX, fallbackY
+    end
+
+    local ok, heading = pcall(compass.getHeading)
+    if not ok or type(heading) ~= "number" or heading < 0 or heading >= 360 then
+        return fallbackX, fallbackY
+    end
+
+    local yaw = math.rad(heading - 90)
+    return math.cos(yaw), math.sin(yaw)
+end
+
 local function typeIconTexture(kind)
     local texturePath = TYPE_ICON_TEXTURES[kind]
     if not texturePath or not UIManager or not UIManager.DrawTexture then return nil end
@@ -1741,6 +1756,7 @@ local function scanNearbyThreats()
     else
         forwardX, forwardY = 1, 0
     end
+    local arrowForwardX, arrowForwardY = cameraForwardDirection(forwardX, forwardY)
     local range = warnALifeNPCs and warningRange() or 0
     local rangeSquared = range * range
     local closeHostileRange = warnCloseHostileAlarm and closeHostileAlarmRange() or 0
@@ -1846,7 +1862,7 @@ local function scanNearbyThreats()
                     rearZombies = rearZombies + 1
                     if rearZombies == 1 or distanceSquared < nearestRearZombie then
                         nearestRearZombie = distanceSquared
-                        nearestRearZombieDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
+                        nearestRearZombieDirectionAngle = directionAngle(dx, dy, arrowForwardX, arrowForwardY)
                     end
                 end
 
@@ -1854,7 +1870,7 @@ local function scanNearbyThreats()
                     sprinters = sprinters + 1
                     if sprinters == 1 or distanceSquared < nearestSprinter then
                         nearestSprinter = distanceSquared
-                        nearestSprinterDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
+                        nearestSprinterDirectionAngle = directionAngle(dx, dy, arrowForwardX, arrowForwardY)
                     end
                 end
                 if sprinterAlarmCandidate and uid == nil then
@@ -1879,14 +1895,14 @@ local function scanNearbyThreats()
                                 end
                                 if threat.nearestDirectionAngle == nil or distanceSquared < threat.nearestDistance then
                                     threat.nearestDistance = distanceSquared
-                                    threat.nearestDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
+                                    threat.nearestDirectionAngle = directionAngle(dx, dy, arrowForwardX, arrowForwardY)
                                 end
                                 if showFirearmWarning and carriesFirearm(project, shell) then
                                     threat.firearmCarriers = threat.firearmCarriers + 1
                                     if threat.nearestFirearmDirectionAngle == nil
                                             or distanceSquared < threat.nearestFirearmDistance then
                                         threat.nearestFirearmDistance = distanceSquared
-                                        threat.nearestFirearmDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
+                                        threat.nearestFirearmDirectionAngle = directionAngle(dx, dy, arrowForwardX, arrowForwardY)
                                     end
                                 end
                             end
