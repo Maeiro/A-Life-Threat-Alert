@@ -4,11 +4,12 @@ require "ISUI/ISUIElement"
 local MOD_ID = "ALifeThreatAlert"
 local DEFAULT_RANGE = 40
 local DEFAULT_CLOSE_HOSTILE_RANGE = 10
-local DEFAULT_ALARM_SOUND = 3
-local DEFAULT_CLOSE_HOSTILE_ALARM_SOUND = 2
-local DEFAULT_SPRINTER_ALARM_SOUND = 2
+local DEFAULT_ALARM_SOUND = 2
+local DEFAULT_CLOSE_HOSTILE_ALARM_SOUND = 1
+local DEFAULT_SPRINTER_ALARM_SOUND = 3
 local DEFAULT_REAR_ZOMBIE_RANGE = 20
 local DEFAULT_SPRINTER_RANGE = 20
+local DEFAULT_SPRINTER_ALARM_DISTANCE = 20
 local DEFAULT_REAR_ZOMBIE_ANGLE = 180
 local DEFAULT_ALARM_VOLUME = 150
 local MAX_ALARM_VOLUME = 200
@@ -22,7 +23,6 @@ local ALERT_POSITION_FILE = "ViewpointThreatDetectorPosition.txt"
 local ZOMBIE_ALERT_POSITION_FILE = "ViewpointThreatDetectorZombiePosition.txt"
 local ALARM_SOUND_IDS = {
     "ViewpointThreatDetectorRadarPing",
-    "ViewpointThreatDetectorSiren",
     "ViewpointThreatDetectorHeartbeat",
     "ViewpointThreatDetectorSoftBeep",
 }
@@ -69,6 +69,21 @@ local NEAT_PANEL_HEADER_TEXTURE = "media/ui/NeatUI/DefaultPanel/MainTitle_BG.png
 local NEAT_PANEL_BODY_TEXTURE = "media/ui/NeatUI/DefaultPanel/MainPanelBG_FlatTop.png"
 
 local modOptions
+local playAlarmSound
+local beginAlertPreview
+local activeAlertPreview
+
+local function stopAlarmAudio(soundInstance)
+    if soundInstance == nil then return end
+    pcall(function()
+        soundInstance.emitter:stopSound(soundInstance.handle)
+    end)
+end
+
+local function onPreviewAlert(_, _, kind)
+    if beginAlertPreview then beginAlertPreview(kind) end
+end
+
 if PZAPI and PZAPI.ModOptions then
     modOptions = PZAPI.ModOptions:create(MOD_ID, "Viewpoint Threat Detector")
     modOptions:addTitle("A-Life NPC Threats")
@@ -95,12 +110,12 @@ if PZAPI and PZAPI.ModOptions then
     )
     modOptions:addSlider(
         "CloseHostileAlarmDistance",
-        "Close Hostile A-Life alarm distance (tiles)",
+        "Hostile A-Life alarm distance (tiles)",
         MIN_CLOSE_HOSTILE_RANGE,
         MAX_RANGE,
         1,
         DEFAULT_CLOSE_HOSTILE_RANGE,
-        "Distance at which the separate Hostile A-Life alarm is triggered."
+        "Distance for the separate Hostile A-Life alarm, independent of the regular NPC warning range."
     )
 
     modOptions:addTitle("Rear Zombie Threats")
@@ -162,7 +177,16 @@ if PZAPI and PZAPI.ModOptions then
         MAX_RANGE,
         1,
         DEFAULT_SPRINTER_RANGE,
-        "Maximum distance for the sprinter warning and its dedicated alarm."
+        "Maximum distance for the sprinter warning. The separate alarm distance is configured below."
+    )
+    modOptions:addSlider(
+        "SprinterAlarmDistance",
+        "Sprinter alarm distance (tiles)",
+        MIN_CLOSE_HOSTILE_RANGE,
+        MAX_RANGE,
+        1,
+        DEFAULT_SPRINTER_ALARM_DISTANCE,
+        "Maximum distance for the dedicated sprinter alarm, independent of its visual warning range."
     )
     modOptions:addTickBox(
         "SprinterSameFloorOnly",
@@ -209,6 +233,31 @@ if PZAPI and PZAPI.ModOptions then
         true,
         "When enabled, threat detection, alerts, and alarm sounds are suppressed until you leave the vehicle."
     )
+    modOptions:addTitle("Alert previews")
+    modOptions:addButton(
+        "PreviewALifeAlert",
+        "Preview A-Life alerts",
+        "Temporarily displays sample Hostile and Friendly A-Life cards on the HUD.",
+        onPreviewAlert,
+        nil,
+        "alife"
+    )
+    modOptions:addButton(
+        "PreviewZombieAlert",
+        "Preview rear zombie alert",
+        "Temporarily displays a sample rear zombie alert on the HUD.",
+        onPreviewAlert,
+        nil,
+        "zombie"
+    )
+    modOptions:addButton(
+        "PreviewSprinterAlert",
+        "Preview sprinter alert",
+        "Temporarily displays a sample sprinter alert on the HUD.",
+        onPreviewAlert,
+        nil,
+        "sprinter"
+    )
 
     modOptions:addTitle("Alarm Sounds")
     modOptions:addTickBox(
@@ -236,7 +285,7 @@ if PZAPI and PZAPI.ModOptions then
         "EnableSprinterAlarm",
         "Play a separate alarm for sprinters",
         true,
-        "Uses the alarm sound and volume configured below when a sprinter enters range."
+        "Uses the selected sound and volume below, with the independent alarm distance from Sprinter Threats."
     )
     local alarmSoundOption = modOptions:addComboBox(
         "AlarmSound",
@@ -244,7 +293,6 @@ if PZAPI and PZAPI.ModOptions then
         "Choose the alarm cue used when a new threat appears."
     )
     alarmSoundOption:addItem("Radar ping", false)
-    alarmSoundOption:addItem("Siren", false)
     alarmSoundOption:addItem("Heartbeat", true)
     alarmSoundOption:addItem("Soft beep", false)
     local closeHostileAlarmSoundOption = modOptions:addComboBox(
@@ -252,8 +300,7 @@ if PZAPI and PZAPI.ModOptions then
         "Close Hostile A-Life alarm sound",
         "Choose a distinct sound cue for Hostile A-Life NPCs that enter the close range."
     )
-    closeHostileAlarmSoundOption:addItem("Radar ping", false)
-    closeHostileAlarmSoundOption:addItem("Siren", true)
+    closeHostileAlarmSoundOption:addItem("Radar ping", true)
     closeHostileAlarmSoundOption:addItem("Heartbeat", false)
     closeHostileAlarmSoundOption:addItem("Soft beep", false)
     local sprinterAlarmSoundOption = modOptions:addComboBox(
@@ -262,9 +309,8 @@ if PZAPI and PZAPI.ModOptions then
         "Choose a distinct sound cue for sprinters entering range."
     )
     sprinterAlarmSoundOption:addItem("Radar ping", false)
-    sprinterAlarmSoundOption:addItem("Siren", true)
     sprinterAlarmSoundOption:addItem("Heartbeat", false)
-    sprinterAlarmSoundOption:addItem("Soft beep", false)
+    sprinterAlarmSoundOption:addItem("Soft beep", true)
     modOptions:addSlider(
         "CloseHostileAlarmVolume",
         "Close Hostile A-Life alarm volume (%)",
@@ -283,6 +329,87 @@ if PZAPI and PZAPI.ModOptions then
         DEFAULT_ALARM_VOLUME,
         "Volume multiplier for the separate sprinter alarm."
     )
+    modOptions:addTitle("In-game sound preview")
+    local alarmPreviewTypeOption = modOptions:addComboBox(
+        "AlarmPreviewType",
+        "Alarm to preview",
+        "Choose which configured alarm is played by the preview key while in-game."
+    )
+    alarmPreviewTypeOption:addItem("Regular alarm", true)
+    alarmPreviewTypeOption:addItem("Close Hostile A-Life", false)
+    alarmPreviewTypeOption:addItem("Sprinter", false)
+    modOptions:addKeyBind(
+        "AlarmPreviewKey",
+        "Play alarm preview in-game",
+        Keyboard.KEY_F9,
+        "Press this key during gameplay to play the selected alarm through the same function used by real alerts."
+    )
+end
+
+local SOUND_MIGRATION_MARKER = "migration|ALifeThreatAlert|siren-removed-v1|1"
+local LEGACY_SOUND_DEFAULTS = {
+    AlarmSound = DEFAULT_ALARM_SOUND,
+    CloseHostileAlarmSound = DEFAULT_CLOSE_HOSTILE_ALARM_SOUND,
+    SprinterAlarmSound = DEFAULT_SPRINTER_ALARM_SOUND,
+}
+
+local function readSavedSoundSelections()
+    local selections = {}
+    local hasMarker = false
+    local ok, reader = pcall(function() return getFileReader("ModOptions.ini", true) end)
+    if not ok or not reader then return selections, hasMarker end
+
+    while true do
+        local readOk, line = pcall(function() return reader:readLine() end)
+        if not readOk or line == nil then break end
+        if string.find(line, SOUND_MIGRATION_MARKER, 1, true) then hasMarker = true end
+        local _, modId, optionId, value = line:match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)")
+        if modId == MOD_ID and LEGACY_SOUND_DEFAULTS[optionId] then
+            selections[optionId] = tonumber(value)
+        end
+    end
+    pcall(function() reader:close() end)
+    return selections, hasMarker
+end
+
+local function hasSoundMigrationMarker(lines)
+    for _, line in ipairs(lines or {}) do
+        if string.find(line, SOUND_MIGRATION_MARKER, 1, true) then return true end
+    end
+    return false
+end
+
+local function migrateLegacySoundIndex(index, default)
+    if index == 1 then return 1 end
+    if index == 2 then return default end
+    if index == 3 then return 2 end
+    if index == 4 then return 3 end
+    return default
+end
+
+if PZAPI and PZAPI.ModOptions and not PZAPI.ModOptions._vtdSirenMigrationInstalled then
+    local originalLoad = PZAPI.ModOptions.load
+    PZAPI.ModOptions.load = function(self, ...)
+        local selections, fileHasMarker = readSavedSoundSelections()
+        local alreadyMigrated = fileHasMarker
+            or hasSoundMigrationMarker(PZAPI.ModOptions.OtherOptions)
+        originalLoad(self, ...)
+
+        if not alreadyMigrated then
+            for optionId, default in pairs(LEGACY_SOUND_DEFAULTS) do
+                local oldIndex = selections[optionId]
+                local option = modOptions and modOptions:getOption(optionId)
+                if oldIndex and option then
+                    option:setValue(migrateLegacySoundIndex(oldIndex, default))
+                end
+            end
+        end
+
+        if not hasSoundMigrationMarker(PZAPI.ModOptions.OtherOptions) then
+            table.insert(PZAPI.ModOptions.OtherOptions, SOUND_MIGRATION_MARKER .. "\r\n")
+        end
+    end
+    PZAPI.ModOptions._vtdSirenMigrationInstalled = true
 end
 
 local alertPositionX
@@ -686,6 +813,12 @@ local function sprinterWarningRange()
     return math.max(MIN_CLOSE_HOSTILE_RANGE, math.min(MAX_RANGE, math.floor(value + 0.5)))
 end
 
+local function sprinterAlarmDistance()
+    local value = tonumber(getOption("SprinterAlarmDistance", DEFAULT_SPRINTER_ALARM_DISTANCE))
+    if not value then return DEFAULT_SPRINTER_ALARM_DISTANCE end
+    return math.max(MIN_CLOSE_HOSTILE_RANGE, math.min(MAX_RANGE, math.floor(value + 0.5)))
+end
+
 local function isSprinter(zombie)
     local ok, speedType = pcall(function() return zombie:getSpeedType() end)
     if not ok then return false end
@@ -857,10 +990,10 @@ local function carriesFirearm(project, shell)
     return ok and result == true
 end
 
-local sprinterZombieIDs = {}
+local sprinterAlarmZombieIDs = {}
 local closeHostileNPCs = {}
 local lastCloseHostileNPCs = {}
-local lastSprinterZombieIDs = {}
+local lastSprinterAlarmZombieIDs = {}
 local errorLogged = false
 
 local function directionAngle(dx, dy, forwardX, forwardY)
@@ -1279,6 +1412,100 @@ local function drawNeatAlertGroup(alertWarnings, zombieWarning, sprinterWarning,
     return bounds
 end
 
+beginAlertPreview = function(kind)
+    if activeAlertPreview and activeAlertPreview.kind == kind
+            and getTimestampMs() < activeAlertPreview.expiresAt then
+        activeAlertPreview = nil
+        return
+    end
+    activeAlertPreview = {
+        kind = kind,
+        expiresAt = getTimestampMs() + 8000,
+    }
+end
+
+local function drawAlertPreview()
+    if not activeAlertPreview then return false end
+    if getTimestampMs() >= activeAlertPreview.expiresAt then
+        activeAlertPreview = nil
+        return false
+    end
+
+    local liveArrowAngles = displayedArrowAngles
+    displayedArrowAngles = {}
+    local ok = pcall(function()
+        local core = getCore()
+        local screenWidth = core:getScreenWidth()
+        local screenHeight = core:getScreenHeight()
+        local text = getTextManager()
+        local centerX = screenWidth * 0.5
+        local startY = screenHeight * 0.62
+        local alertWarnings = {}
+        local zombieWarning
+        local sprinterWarning
+
+        if activeAlertPreview.kind == "alife" then
+            alertWarnings = {
+                {
+                    stance = "hostile",
+                    count = 2,
+                    distance = 6,
+                    directionAngle = math.rad(28),
+                    firearmCarriers = 1,
+                    showArrow = true,
+                },
+                {
+                    stance = "careful",
+                    count = 1,
+                    distance = 18,
+                    directionAngle = math.rad(-72),
+                    firearmCarriers = 0,
+                    showArrow = true,
+                },
+                {
+                    stance = "friendly",
+                    count = 3,
+                    distance = 34,
+                    directionAngle = math.rad(142),
+                    firearmCarriers = 0,
+                    showArrow = true,
+                },
+            }
+        elseif activeAlertPreview.kind == "zombie" then
+            zombieWarning = { count = 3, distance = 4, directionAngle = math.rad(-38) }
+        else
+            sprinterWarning = { count = 1, distance = 12, directionAngle = math.rad(54) }
+        end
+
+        local headerTexture = neatPanelTexture(NEAT_PANEL_HEADER_TEXTURE)
+        local bodyTexture = neatPanelTexture(NEAT_PANEL_BODY_TEXTURE)
+        if headerTexture and bodyTexture then
+            drawNeatAlertGroup(
+                alertWarnings, zombieWarning, sprinterWarning,
+                headerTexture, bodyTexture, text,
+                screenWidth, centerX, startY, getOption("MinimalAlertUI", false)
+            )
+        else
+            drawCompactAlertGroup(
+                alertWarnings, zombieWarning, sprinterWarning,
+                text, screenWidth, centerX, startY, getOption("MinimalAlertUI", false)
+            )
+        end
+    end)
+    displayedArrowAngles = liveArrowAngles
+    if not ok then activeAlertPreview = nil end
+    return ok
+end
+
+local function alertPreviewIsActive()
+    if not activeAlertPreview then return false end
+    if getTimestampMs() >= activeAlertPreview.expiresAt then
+        activeAlertPreview = nil
+        return false
+    end
+    return true
+end
+
 local function isBlockedBetweenSquares(firstSquare, secondSquare)
     return firstSquare:isBlockedTo(secondSquare) or secondSquare:isBlockedTo(firstSquare)
 end
@@ -1355,7 +1582,7 @@ local function scanNearbyThreats()
     warnings = {}
     rearZombieWarning = nil
     sprinterWarning = nil
-    sprinterZombieIDs = {}
+    sprinterAlarmZombieIDs = {}
     closeHostileNPCs = {}
     local stanceEnabled = {}
     local warnALifeNPCs = false
@@ -1366,8 +1593,11 @@ local function scanNearbyThreats()
     end
     local warnRearZombies = getOption("EnableRearZombieWarning", true)
     local warnSprinters = getOption("EnableSprinterWarning", true)
+    local warnSprinterAlarm = getOption("EnableAlarmSound", true)
+        and getOption("EnableSprinterAlarm", true)
     local warnCloseHostileAlarm = getOption("EnableCloseHostileAlarm", true)
-    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm and not warnSprinters then return end
+    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm
+            and not warnSprinters and not warnSprinterAlarm then return end
 
     local project = ProjectALife
     if type(project) ~= "table" then
@@ -1375,7 +1605,8 @@ local function scanNearbyThreats()
         warnALifeNPCs = false
         warnCloseHostileAlarm = false
     end
-    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm and not warnSprinters then return end
+    if not warnALifeNPCs and not warnRearZombies and not warnCloseHostileAlarm
+            and not warnSprinters and not warnSprinterAlarm then return end
     local player = getSpecificPlayer(0)
     if player == nil or player:isDead() then return end
     if disableAlertsInVehicle and playerInVehicle then return end
@@ -1400,9 +1631,11 @@ local function scanNearbyThreats()
     local rearRangeSquared = rearRange * rearRange
     local sprinterRange = warnSprinters and sprinterWarningRange() or 0
     local sprinterRangeSquared = sprinterRange * sprinterRange
+    local sprinterAlarmRange = warnSprinterAlarm and sprinterAlarmDistance() or 0
+    local sprinterAlarmRangeSquared = sprinterAlarmRange * sprinterAlarmRange
     local rearAngleCos = math.cos(math.rad(rearZombieWarningAngle() * 0.5))
     local scanRangeSquared = math.max(rangeSquared, rearRangeSquared,
-        closeHostileRangeSquared, sprinterRangeSquared)
+        closeHostileRangeSquared, sprinterRangeSquared, sprinterAlarmRangeSquared)
     local showDirectionArrow = getOption("ShowDirectionArrow", true)
     local showFirearmWarning = getOption("ShowFirearmWarning", false)
     local ignoreFallenZombies = getOption("IgnoreFallenZombies", false)
@@ -1433,7 +1666,7 @@ local function scanNearbyThreats()
             local dx, dy = x - px, y - py
             local distanceSquared = dx * dx + dy * dy
             local nearbyFloor = math.abs(z - pz) <= 1
-                or (warnSprinters and not sprinterSameFloorOnly)
+                or ((warnSprinters or warnSprinterAlarm) and not sprinterSameFloorOnly)
             if nearbyFloor and distanceSquared <= scanRangeSquared then
                 local rearCandidate = false
                 if warnRearZombies and distanceSquared <= rearRangeSquared then
@@ -1456,26 +1689,36 @@ local function scanNearbyThreats()
                 end
                 local closeHostileCandidate = warnCloseHostileAlarm
                     and distanceSquared <= closeHostileRangeSquared
+                local canBeSprinter = (warnSprinters and distanceSquared <= sprinterRangeSquared)
+                    or (warnSprinterAlarm and distanceSquared <= sprinterAlarmRangeSquared)
+                local sprinterType = canBeSprinter and isSprinter(shell)
                 local sprinterCandidate = warnSprinters
-                    and distanceSquared <= sprinterRangeSquared
-                    and isSprinter(shell)
-                if sprinterCandidate and sprinterIgnoreFallen then
+                    and distanceSquared <= sprinterRangeSquared and sprinterType
+                local sprinterAlarmCandidate = warnSprinterAlarm
+                    and distanceSquared <= sprinterAlarmRangeSquared and sprinterType
+                if sprinterType and sprinterIgnoreFallen then
                     local ok, onFloor = pcall(function() return shell:isOnFloor() end)
-                    if ok and onFloor == true then sprinterCandidate = false end
+                    if ok and onFloor == true then
+                        sprinterCandidate = false
+                        sprinterAlarmCandidate = false
+                    end
                 end
-                if sprinterCandidate then
-                    sprinterCandidate = passesRearZombieVisibilityFilters(
+                if sprinterCandidate or sprinterAlarmCandidate then
+                    local passesSprinterVisibility = passesRearZombieVisibilityFilters(
                         shell,
                         playerSquare,
                         cell,
                         sprinterSameFloorOnly,
                         sprinterRequireLineOfSight
                     )
+                    sprinterCandidate = sprinterCandidate and passesSprinterVisibility
+                    sprinterAlarmCandidate = sprinterAlarmCandidate and passesSprinterVisibility
                 end
                 local alifeCandidate = (warnALifeNPCs and distanceSquared <= rangeSquared)
                     or closeHostileCandidate
                 local uid
-                if project and (rearCandidate or alifeCandidate or sprinterCandidate) then
+                if project and (rearCandidate or alifeCandidate or sprinterCandidate
+                        or sprinterAlarmCandidate) then
                     uid = uidOf(project, shell)
                 end
 
@@ -1489,11 +1732,13 @@ local function scanNearbyThreats()
 
                 if sprinterCandidate and uid == nil then
                     sprinters = sprinters + 1
-                    sprinterZombieIDs[zombieAlertId(shell)] = true
                     if sprinters == 1 or distanceSquared < nearestSprinter then
                         nearestSprinter = distanceSquared
                         nearestSprinterDirectionAngle = directionAngle(dx, dy, forwardX, forwardY)
                     end
+                end
+                if sprinterAlarmCandidate and uid == nil then
+                    sprinterAlarmZombieIDs[zombieAlertId(shell)] = true
                 end
 
                 if alifeCandidate and uid ~= nil then
@@ -1568,7 +1813,10 @@ local function warningSignature()
         parts[#parts + 1] = warning.stance
     end
     if rearZombieWarning then parts[#parts + 1] = "rear-zombies" end
-    if sprinterWarning then parts[#parts + 1] = "sprinters" end
+    if sprinterWarning and not (getOption("EnableAlarmSound", true)
+            and getOption("EnableSprinterAlarm", true)) then
+        parts[#parts + 1] = "sprinters"
+    end
     return table.concat(parts, "|")
 end
 
@@ -1576,40 +1824,114 @@ local function alarmSignature()
     if getOption("ZombieAlarmOnly", true) then
         local parts = {}
         if rearZombieWarning then parts[#parts + 1] = "rear-zombies" end
-        if sprinterWarning then parts[#parts + 1] = "sprinters" end
+        if sprinterWarning and not (getOption("EnableSprinterAlarm", true)) then
+            parts[#parts + 1] = "sprinters"
+        end
         return table.concat(parts, "|")
     end
     return warningSignature()
 end
 
-local function playAlarmSound(soundOption, volumeOption)
+playAlarmSound = function(soundOption, volumeOption, selectedSound, selectedVolume)
     local defaultSound = DEFAULT_ALARM_SOUND
     if soundOption == "CloseHostileAlarmSound" then
         defaultSound = DEFAULT_CLOSE_HOSTILE_ALARM_SOUND
     elseif soundOption == "SprinterAlarmSound" then
         defaultSound = DEFAULT_SPRINTER_ALARM_SOUND
     end
-    local index = math.floor(tonumber(getOption(soundOption or "AlarmSound", defaultSound)) or defaultSound)
+    local index = math.floor(tonumber(selectedSound)
+        or tonumber(getOption(soundOption or "AlarmSound", defaultSound)) or defaultSound)
     local sound = ALARM_SOUND_IDS[index] or ALARM_SOUND_IDS[1]
-    local volume = tonumber(getOption(volumeOption or "AlarmVolume", DEFAULT_ALARM_VOLUME))
+    local volume = tonumber(selectedVolume)
+        or tonumber(getOption(volumeOption or "AlarmVolume", DEFAULT_ALARM_VOLUME))
         or DEFAULT_ALARM_VOLUME
     volume = math.max(0, math.min(MAX_ALARM_VOLUME, volume))
-    if activeAlarmSound then
-        pcall(function()
-            getSoundManager():stopUISound(activeAlarmSound)
+    stopAlarmAudio(activeAlarmSound)
+    activeAlarmSound = nil
+
+    local uiSoundMuted = "unknown"
+    local managerOk, soundManager = pcall(getSoundManager)
+    if managerOk and soundManager ~= nil then
+        local mutedOk, muted = pcall(function()
+            return soundManager:isUiSoundMuted()
         end)
-        activeAlarmSound = nil
+        if mutedOk then uiSoundMuted = tostring(muted) end
     end
 
-    local ok, soundInstance = pcall(function()
-        return getSoundManager():playUISound(sound)
-    end)
-    if ok and soundInstance ~= nil and soundInstance ~= 0 then
-        activeAlarmSound = soundInstance
-        pcall(function()
-            getSoundManager():getUIEmitter():setVolume(soundInstance, volume / 100)
-        end)
+    if not managerOk or soundManager == nil then
+        print("[Viewpoint Threat Detector] Alarm playback failed: sound manager unavailable"
+            .. " event=" .. tostring(sound) .. " uiSoundMuted=" .. uiSoundMuted)
+        return false, soundManager
     end
+    local emitterOk, emitter = pcall(function()
+        return soundManager:getUIEmitter()
+    end)
+    if not emitterOk or emitter == nil then
+        print("[Viewpoint Threat Detector] Alarm playback failed: UI emitter unavailable"
+            .. " event=" .. tostring(sound) .. " uiSoundMuted=" .. uiSoundMuted)
+        return false, "UI emitter unavailable"
+    end
+
+    local ok, handle = pcall(function()
+        return emitter:playSound(sound)
+    end)
+    if not ok or handle == nil or handle == 0 then
+        print("[Viewpoint Threat Detector] Alarm playback failed: " .. tostring(handle)
+            .. " event=" .. tostring(sound) .. " uiSoundMuted=" .. uiSoundMuted)
+        return false, handle
+    end
+
+    local volumeApplied, volumeError = pcall(function()
+        emitter:setVolume(handle, volume / 100)
+    end)
+    activeAlarmSound = { emitter = emitter, handle = handle }
+    if not volumeApplied then
+        print("[Viewpoint Threat Detector] Alarm volume failed: " .. tostring(volumeError)
+            .. " event=" .. tostring(sound))
+    end
+    return true, sound, handle, volumeApplied, volumeError
+end
+
+local ALARM_PREVIEW_OPTIONS = {
+    { name = "regular", sound = "AlarmSound", volume = "AlarmVolume" },
+    { name = "close-hostile", sound = "CloseHostileAlarmSound", volume = "CloseHostileAlarmVolume" },
+    { name = "sprinter", sound = "SprinterAlarmSound", volume = "SprinterAlarmVolume" },
+}
+
+local function onAlarmPreviewKeyPressed(key)
+    local previewKey = tonumber(getOption("AlarmPreviewKey", Keyboard.KEY_F9))
+    if not previewKey or previewKey == 0 or key ~= previewKey then return end
+    local playerOk, player = pcall(getPlayer)
+    if not playerOk or player == nil then return end
+
+    local previewIndex = math.floor(tonumber(getOption("AlarmPreviewType", 1)) or 1)
+    local preview = ALARM_PREVIEW_OPTIONS[previewIndex] or ALARM_PREVIEW_OPTIONS[1]
+    local played, sound, handle, volumeApplied, errorMessage =
+        playAlarmSound(preview.sound, preview.volume)
+    local isPlaying = false
+    if activeAlarmSound then
+        local isPlayingOk, result = pcall(function()
+            return activeAlarmSound.emitter:isPlaying(activeAlarmSound.handle)
+        end)
+        isPlaying = isPlayingOk and tostring(result) or "unknown"
+    end
+    local soundManagerOk, soundManager = pcall(getSoundManager)
+    local uiSoundMuted = "unknown"
+    if soundManagerOk and soundManager ~= nil then
+        local mutedOk, muted = pcall(function()
+            return soundManager:isUiSoundMuted()
+        end)
+        if mutedOk then uiSoundMuted = tostring(muted) end
+    end
+    print("[Viewpoint Threat Detector] In-game alarm preview: target=" .. preview.name
+        .. " event=" .. tostring(sound) .. " handle=" .. tostring(handle)
+        .. " volumeApplied=" .. tostring(volumeApplied) .. " isPlaying=" .. tostring(isPlaying)
+        .. " uiSoundMuted=" .. uiSoundMuted .. " error=" .. tostring(errorMessage)
+        .. " played=" .. tostring(played))
+end
+
+if Events and Events.OnKeyPressed then
+    Events.OnKeyPressed.Add(onAlarmPreviewKeyPressed)
 end
 
 local function updateWarning()
@@ -1618,11 +1940,11 @@ local function updateWarning()
         warnings = {}
         rearZombieWarning = nil
         sprinterWarning = nil
-        sprinterZombieIDs = {}
+        sprinterAlarmZombieIDs = {}
         closeHostileNPCs = {}
         lastAlarmSignature = ""
         lastCloseHostileNPCs = {}
-        lastSprinterZombieIDs = {}
+        lastSprinterAlarmZombieIDs = {}
         if not errorLogged then
             print("[Viewpoint Threat Detector] Detection failed: " .. tostring(err))
             errorLogged = true
@@ -1634,9 +1956,7 @@ local function updateWarning()
     local alarmSoundsEnabled = getOption("EnableAlarmSound", true)
     local closeHostileAlarmEnabled = alarmSoundsEnabled
         and getOption("EnableCloseHostileAlarm", true)
-    local sprinterAlarmEnabled = alarmSoundsEnabled
-        and getOption("EnableSprinterWarning", true)
-        and getOption("EnableSprinterAlarm", true)
+    local sprinterAlarmEnabled = alarmSoundsEnabled and getOption("EnableSprinterAlarm", true)
     local closeHostileAlarmEntered = false
     if closeHostileAlarmEnabled then
         for uid in pairs(closeHostileNPCs) do
@@ -1648,8 +1968,8 @@ local function updateWarning()
     end
     local sprinterAlarmEntered = false
     if sprinterAlarmEnabled then
-        for id in pairs(sprinterZombieIDs) do
-            if not lastSprinterZombieIDs[id] then
+        for id in pairs(sprinterAlarmZombieIDs) do
+            if not lastSprinterAlarmZombieIDs[id] then
                 sprinterAlarmEntered = true
                 break
             end
@@ -1666,20 +1986,25 @@ local function updateWarning()
     end
     lastAlarmSignature = signature
     lastCloseHostileNPCs = closeHostileAlarmEnabled and closeHostileNPCs or {}
-    lastSprinterZombieIDs = sprinterAlarmEnabled and sprinterZombieIDs or {}
+    lastSprinterAlarmZombieIDs = sprinterAlarmEnabled and sprinterAlarmZombieIDs or {}
 end
 
 local function drawWarning()
+    if alertPreviewIsActive() then
+        updateAlertDragHandle(nil, 0, 0)
+        updateAlertDragHandle(nil, 0, 0, "zombie")
+        return
+    end
     if disableAlertsInVehicle and playerInVehicle then
         displayedArrowAngles = {}
         warnings = {}
         rearZombieWarning = nil
         sprinterWarning = nil
-        sprinterZombieIDs = {}
+        sprinterAlarmZombieIDs = {}
         closeHostileNPCs = {}
         lastAlarmSignature = ""
         lastCloseHostileNPCs = {}
-        lastSprinterZombieIDs = {}
+        lastSprinterAlarmZombieIDs = {}
         updateAlertDragHandle(nil, 0, 0)
         updateAlertDragHandle(nil, 0, 0, "zombie")
         return
@@ -1964,4 +2289,7 @@ end
 
 if Events and Events.OnPreUIDraw then
     Events.OnPreUIDraw.Add(drawWarning)
+end
+if Events and Events.OnPostUIDraw then
+    Events.OnPostUIDraw.Add(drawAlertPreview)
 end
